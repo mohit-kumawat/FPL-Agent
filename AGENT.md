@@ -36,14 +36,21 @@ the owner's explicit go-ahead in that conversation.**
 ```yaml
 date: 2026-08-15
 source: "Arteta press conference"
+confidence: high         # high | medium | low — scales ep_per_gw 1.0 / 0.6 / 0.3
+ttl_days: 14             # or `expires: 2026-08-22`; expired files are ignored
 notes: "Saka full training, expected to start GW1"
 adjustments:
   - player_id: 12        # FPL element id (see reports or data/snapshots)
-    xmins_min: 0.9       # optional floor on expected-minutes fraction ("nailed")
-    xmins_max: 0.45      # optional cap ("not in predicted XI", "rotation risk")
-    ep_per_gw: 0.4       # optional EP/GW nudge for quality/role news only
+    xmins_min: 0.9       # floor on expected-minutes fraction ("nailed")
+    ep_per_gw: 0.4       # EP/GW nudge for quality/role news only
     reason: "confirmed starter, was priced as rotation risk"
+  - player_id: 388       # a separate player who is NOT expected to start
+    xmins_max: 0.45      # cap ("not in predicted XI", "rotation risk")
+    reason: "omitted from the predicted XI"
 ```
+
+Use `xmins_min` **or** `xmins_max` for a given player, never both — a floor above
+a cap is a contradiction and the whole file is rejected.
 
 Rule of thumb: minutes news → `xmins_min`/`xmins_max`; quality/role news that
 minutes can't express (pen duty gained, pushed forward) → `ep_per_gw` in [-2, 2].
@@ -53,7 +60,13 @@ Add `confidence: high|medium|low` per file (default medium). It scales ep_per_gw
 by 1.0/0.6/0.3 — a manager quote is `high`; an aggregator's guess is `low`.
 Minutes bounds are unweighted: write them only when they're facts.
 
-Delete or amend a signal file when it goes stale — signals are re-read every run.
+Add `ttl_days:` (default 14) or an explicit `expires:` date. Expired files are
+ignored automatically — never rely on remembering to delete one.
+
+**Validation is enforced.** A file is ignored in full, with the reason printed in
+the report, if it has expired, fails to parse, sets `xmins_min` above
+`xmins_max`, puts a bound outside [0, 1], or uses `ep_per_gw` beyond ±2. Check the
+report's Key findings for `⚠ ... IGNORED` after writing a signal.
 
 ## Other commands
 
@@ -101,15 +114,18 @@ ceiling and consensus safety are legitimate tie-breakers for the owner to choose
 
 ## Data freshness (you do not have to manage this manually)
 
-Prices come from the official FPL API and change daily at ~01:30 UTC. `fpl daily`
-refetches automatically whenever the cache predates that boundary or is >12h old,
-and every report states when prices were fetched. Within 24h of a deadline, data
-older than 3h **blocks** recommendations — run `uv run fpl refresh` and rerun.
-Run the daily loop after ~02:00 UTC to pick up the day's price changes.
+Prices come from the official FPL API and change at **00:00 UK local time**
+(23:00 UTC under BST, 00:00 UTC under GMT — the code handles the clock change).
+`fpl daily` refetches automatically whenever the cache predates that boundary, is
+over 12h old, or is over 3h old within 24h of a deadline. Every report states when
+prices were fetched. Run the loop any time after ~01:00 UK to pick up the day's
+changes.
 
 ## Key dates / facts
 
 - GW1 deadline: 2026-08-21 17:30 UTC. The account has NO team
   yet — the first job is entering the `fpl build` squad before that deadline.
 - Wildcard windows: GW2–19 and GW20–38. Preseason changes are free.
-- Free transfers bank up to 5. Selling price = purchase + floor(profit/2).
+- Free transfers bank up to 5. Selling price: if the price **rose**,
+  `purchase + floor(profit/2)`; if it **fell**, the current price — losses are
+  taken in full, with no floor at the purchase price.

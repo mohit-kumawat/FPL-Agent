@@ -45,21 +45,27 @@ def _players(n_per_pos: int = 6) -> pd.DataFrame:
 
 
 # ------------------------------------------------------------- price freshness
-def test_price_boundary_is_most_recent_0130():
-    now = datetime(2026, 8, 11, 9, 0, tzinfo=timezone.utc)
-    assert data.last_price_change(now) == datetime(2026, 8, 11, 1, 30, tzinfo=timezone.utc)
+def test_price_boundary_tracks_uk_local_midnight_in_summer():
+    """BST: 00:00 UK is 23:00 UTC the previous day (+ settle grace)."""
+    now = datetime(2026, 8, 17, 9, 0, tzinfo=timezone.utc)
+    assert data.last_price_change(now) == datetime(2026, 8, 16, 23, 20, tzinfo=timezone.utc)
 
 
-def test_price_boundary_rolls_back_before_0130():
-    now = datetime(2026, 8, 11, 0, 45, tzinfo=timezone.utc)
-    assert data.last_price_change(now) == datetime(2026, 8, 10, 1, 30, tzinfo=timezone.utc)
+def test_price_boundary_tracks_uk_local_midnight_in_winter():
+    """GMT: 00:00 UK is 00:00 UTC the same day (+ settle grace)."""
+    now = datetime(2026, 12, 17, 9, 0, tzinfo=timezone.utc)
+    assert data.last_price_change(now) == datetime(2026, 12, 17, 0, 20, tzinfo=timezone.utc)
 
 
-def test_snapshot_before_price_change_is_stale(monkeypatch):
-    """The core guarantee: a same-day cache taken pre-01:30 must NOT be reused."""
-    now = datetime(2026, 8, 11, 9, 0, tzinfo=timezone.utc)
+def test_snapshot_taken_before_uk_midnight_change_is_stale(monkeypatch):
+    """The core guarantee: a cache from before the change must NOT be reused.
+
+    Regression for a fixed 01:30 UTC constant, which served pre-change prices
+    for hours during BST while reporting them as fresh.
+    """
+    now = datetime(2026, 8, 17, 23, 30, tzinfo=timezone.utc)     # after 00:00 UK
     monkeypatch.setattr(data, "snapshot_fetched_at",
-                        lambda name, day=None: datetime(2026, 8, 11, 0, 30, tzinfo=timezone.utc))
+                        lambda name, day=None: datetime(2026, 8, 17, 22, 0, tzinfo=timezone.utc))
     stale, reason = data.is_stale("bootstrap", now)
     assert stale and "price change" in reason
 
@@ -229,6 +235,73 @@ def test_hit_on_minutes_capped_player_is_blocked():
     ]}
     # 6.5 clears the 6.0 bar but not the 7.5 required for a minutes-capped buy
     assert policy.assess_transfers(plan, free_transfers=1, gws_played=20)["action"] == "hold"
+
+
+# ------------------------------------------------------------- signals
+def _write_signal(tmp_path, monkeypatch, body: str) -> tuple:
+    monkeypatch.setattr(memoryio, "SIGNALS_DIR", tmp_path)
+    (tmp_path / "s.yaml").write_text(body)
+    return memoryio.load_signals(now=datetime(2026, 8, 20, tzinfo=timezone.utc))
+
+
+def test_contradictory_minutes_bounds_are_rejected(tmp_path, monkeypatch):
+    frame, notes = _write_signal(tmp_path, monkeypatch, """
+date: 2026-08-19
+adjustments:
+  - player_id: 12
+    xmins_min: 0.9
+    xmins_max: 0.45
+""")
+    assert frame.empty
+    assert any("contradictory" in p for n in notes for p in n["problems"])
+
+
+def test_expired_signal_is_ignored_without_manual_deletion(tmp_path, monkeypatch):
+    frame, notes = _write_signal(tmp_path, monkeypatch, """
+date: 2026-08-01
+ttl_days: 7
+adjustments:
+  - player_id: 12
+    xmins_max: 0.4
+""")
+    assert frame.empty
+    assert any("expired" in p for n in notes for p in n["problems"])
+
+
+def test_oversized_ep_nudge_is_rejected(tmp_path, monkeypatch):
+    frame, notes = _write_signal(tmp_path, monkeypatch, """
+date: 2026-08-19
+adjustments:
+  - player_id: 12
+    ep_per_gw: 9.0
+""")
+    assert frame.empty
+    assert any("exceeds" in p for n in notes for p in n["problems"])
+
+
+def test_valid_signal_is_applied_with_confidence_weight(tmp_path, monkeypatch):
+    frame, notes = _write_signal(tmp_path, monkeypatch, """
+date: 2026-08-19
+confidence: low
+adjustments:
+  - player_id: 12
+    ep_per_gw: 1.0
+    xmins_min: 0.85
+""")
+    assert frame.loc[12, "ep_per_gw"] == pytest.approx(0.3)   # low = 0.3x
+    assert frame.loc[12, "xmins_min"] == 0.85
+    assert notes[0]["applied"]
+
+
+# ------------------------------------------------------------- transfer depth
+def test_transfer_search_covers_banked_free_transfers():
+    ep = models.expected_points(_players(8))
+    squad = optimizer.build_squad(ep)["squad"]
+    ids = list(squad["id"])
+    sell = dict(zip(squad["id"], squad["price"]))
+    res = optimizer.plan_transfers(ep, ids, sell, bank=5.0, free_transfers=5)
+    # must evaluate beyond the old hard cap of 3 so "not optimal" != "not tried"
+    assert max(p["n_transfers"] for p in res["plans"]) >= 5
 
 
 if __name__ == "__main__":

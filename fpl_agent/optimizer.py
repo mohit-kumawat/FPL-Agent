@@ -114,13 +114,19 @@ def pick_xi(squad: pd.DataFrame, ep_col: str = "ep_next") -> dict:
 # ------------------------------------------------------------ transfer plan
 def plan_transfers(players: pd.DataFrame, current_ids: list[int],
                    selling_prices: dict[int, float], bank: float,
-                   free_transfers: int, max_transfers: int = 3,
+                   free_transfers: int, max_transfers: int | None = None,
                    ep_col: str = "ep_horizon") -> dict:
     """Evaluate 0..max_transfers moves; returns the best plan net of hits.
 
     Solves one ILP per transfer count k with sum(out)=k, then compares
     objective - hit_cost across k. k <= free_transfers costs nothing.
+
+    The default search depth covers every banked free transfer plus one hit,
+    capped at MAX_TRANSFER_SEARCH. Searching only to 3 would make "4 transfers
+    is not optimal" indistinguishable from "4 transfers was never evaluated".
     """
+    if max_transfers is None:
+        max_transfers = min(config.MAX_TRANSFER_SEARCH, max(2, free_transfers + 1))
     pool = players[players["available"] & (players["xmins"] > 0.05)].copy()
     cur = players[players["id"].isin(current_ids)]
     pool = pd.concat([pool, cur[~cur.index.isin(pool.index)]])  # can keep unavailable

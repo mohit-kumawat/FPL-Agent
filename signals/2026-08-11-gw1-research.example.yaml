@@ -1,4 +1,6 @@
 date: 2026-08-11
+confidence: medium
+ttl_days: 10          # ignored automatically after this; no manual deletion needed
 source: "Web research: OneFPL GW1 injuries + predicted lineups; Fantasy Football Scout pre-season (Aug 10); FPL Copilot / AllAboutFPL / Onside GW1 consensus"
 notes: >
   GW1 2026/27 research sweep. Haaland: nailed, rested (Norway out of WC quarters),

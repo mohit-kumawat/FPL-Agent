@@ -27,6 +27,11 @@ POSITIONS = {
 }
 XI_SIZE = 11
 TRANSFER_HIT = 4        # points per extra transfer
+MAX_FREE_TRANSFERS = 5  # free transfers bank up to five
+# Upper bound on the transfer-count search. Must exceed MAX_FREE_TRANSFERS so a
+# hit is always evaluated (and then usually rejected by policy) rather than
+# never considered.
+MAX_TRANSFER_SEARCH = 6
 
 # ------------------------------------------------------------- API endpoints
 API_BASE = "https://fantasy.premierleague.com/api"
@@ -40,13 +45,17 @@ ENDPOINTS = {
 }
 USER_AGENT = "Mozilla/5.0 (fpl-agent personal research)"
 
-# Price freshness: FPL applies price changes daily at ~01:30 UTC. A cached
-# snapshot taken before that boundary holds yesterday's prices, so date-based
-# caching alone is unsafe — see data.is_stale().
-PRICE_CHANGE_UTC_HOUR = 1
-PRICE_CHANGE_UTC_MINUTE = 30
-MAX_SNAPSHOT_AGE_HOURS = 12     # refetch anything older, even same-day
-DEADLINE_FRESH_HOURS = 3        # within 24h of a deadline, demand this freshness
+# Price freshness. For 2026/27 FPL applies price changes daily at 00:00 *UK
+# local time* (premierleague.com/en/news/4680462). That is a local wall-clock
+# time, so it lands at 23:00 UTC under BST and 00:00 UTC under GMT — a fixed
+# UTC constant cannot express it and would serve pre-change prices for hours.
+# See data.last_price_change().
+PRICE_CHANGE_TZ = "Europe/London"
+PRICE_CHANGE_LOCAL_HOUR = 0
+PRICE_CHANGE_LOCAL_MINUTE = 0
+PRICE_CHANGE_GRACE_MINUTES = 20  # the API takes a few minutes to settle
+MAX_SNAPSHOT_AGE_HOURS = 12      # refetch anything older, even same-day
+DEADLINE_FRESH_HOURS = 3         # within 24h of a deadline, demand this freshness
 
 # Prior-season gameweek history (vaastav repo)
 VAASTAV_MERGED_GW = (

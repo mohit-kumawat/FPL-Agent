@@ -114,7 +114,11 @@ def _render_md(ctx: dict) -> str:
         for risk in r["risks"]:
             lines.append(f"- {risk}")
     for n in ctx.get("signal_notes", []):
-        lines.append(f"- [SIGNAL] {n.get('date', '?')} {n.get('source', '?')}: {n.get('notes', '')}")
+        if n.get("problems"):
+            lines.append(f"- [SIGNAL] ⚠ {n['file']} IGNORED: {'; '.join(n['problems'])}")
+        else:
+            lines.append(f"- [SIGNAL] {n.get('date', '?')} {n.get('source', '?')}: "
+                         f"{n.get('notes', '')}")
     if not ctx["findings"] and not ctx.get("rating") and not ctx.get("signal_notes"):
         lines.append("- None today.")
 

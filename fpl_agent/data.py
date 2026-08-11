@@ -7,6 +7,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -83,14 +84,23 @@ def snapshot_fetched_at(name: str, day: str | None = None) -> datetime | None:
 
 
 def last_price_change(now: datetime | None = None) -> datetime:
-    """Most recent FPL price-change boundary (daily ~01:30 UTC)."""
+    """Most recent FPL price-change boundary, returned in UTC.
+
+    Prices change at 00:00 UK *local* time, so the UTC instant moves with
+    BST/GMT (23:00 UTC in summer, 00:00 UTC in winter). Computing this in
+    London local time and converting is the only way to stay correct across
+    the clock changes. A short grace period lets the API settle.
+    """
     now = now or datetime.now(timezone.utc)
-    boundary = now.replace(hour=config.PRICE_CHANGE_UTC_HOUR,
-                           minute=config.PRICE_CHANGE_UTC_MINUTE,
-                           second=0, microsecond=0)
-    if boundary > now:
+    tz = ZoneInfo(config.PRICE_CHANGE_TZ)
+    local = now.astimezone(tz)
+    boundary = local.replace(hour=config.PRICE_CHANGE_LOCAL_HOUR,
+                             minute=config.PRICE_CHANGE_LOCAL_MINUTE,
+                             second=0, microsecond=0)
+    boundary += timedelta(minutes=config.PRICE_CHANGE_GRACE_MINUTES)
+    if boundary > local:
         boundary -= timedelta(days=1)
-    return boundary
+    return boundary.astimezone(timezone.utc)
 
 
 def is_stale(name: str, now: datetime | None = None,
