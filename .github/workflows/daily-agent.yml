@@ -1,0 +1,42 @@
+# Optional: run the pipeline daily in GitHub Actions.
+#
+# Read this before enabling:
+#  - Prices change at ~01:30 UTC; this runs at 07:00 UTC so it always sees the
+#    day's new prices. Near a deadline you should still run locally — verify.py
+#    blocks recommendations on data older than 3h when <24h remain.
+#  - Reports and squad.yaml are gitignored by default. If you enable the commit
+#    step you will be publishing your own team and decisions. Only do that on a
+#    private fork.
+#  - This produces a report; it never touches your FPL account.
+
+name: daily-agent
+
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    # Disabled by default: set repo variable ENABLE_DAILY_AGENT=true to turn on.
+    if: vars.ENABLE_DAILY_AGENT == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync
+      - name: Restore data cache
+        uses: actions/cache@v4
+        with:
+          path: data
+          key: fpl-data-${{ github.run_id }}
+          restore-keys: fpl-data-
+      - run: uv run fpl daily
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: fpl-report
+          path: reports/
+          retention-days: 30

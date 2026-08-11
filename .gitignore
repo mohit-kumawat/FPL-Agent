@@ -1,0 +1,38 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# --- Personal / private data: never publish -------------------------------
+# Your squad, entry id and purchase prices. Start from squad.example.yaml.
+squad.yaml
+
+# Session cookie or any secret you add yourself
+.env
+.env.*
+
+# Your own run history: reports, decisions, research notes, predictions
+reports/
+memory/state.json
+memory/pending.json
+memory/decisions.jsonl
+memory/runs.jsonl
+memory/predictions/
+memory/research/
+
+# Your research signals (may quote paywalled/personal sources)
+signals/*.yaml
+signals/*.yml
+!signals/*.example.yaml
+
+# --- Caches: large, regenerable, and API-derived ---------------------------
+data/snapshots/
+data/history/
+data/*.csv
+data/*.parquet

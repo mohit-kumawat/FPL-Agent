@@ -1,0 +1,21 @@
+# Copy to squad.yaml and fill in with your own team. squad.yaml is gitignored.
+#
+# Why purchase_price matters: the public FPL API never exposes selling prices.
+# Selling price = purchase + floor((current - purchase) / 2), in 0.1m steps.
+# Without accurate purchase prices, every transfer budget calculation is wrong.
+#
+# Leave `players: []` before your first squad is picked — the pipeline then runs
+# in build mode (`fpl build`) instead of transfer mode.
+
+entry_id: null            # your FPL entry id: the number in fantasy.premierleague.com/entry/<ID>/event/1
+player_id: null           # optional: your FPL account player id (not the entry id)
+season: "2026-27"
+bank: 100.0               # £m unspent (100.0 when no squad exists yet)
+free_transfers: 0         # 0-5; they bank up to 5
+chips_available: [wildcard1, wildcard2, bboost, 3xc, freehit]
+
+players: []
+# players:
+#   - {id: 411, name: Haaland, purchase_price: 15.5}
+#   - {id: 426, name: B.Fernandes, purchase_price: 12.0}
+#   ... 15 total: 2 GKP, 5 DEF, 5 MID, 3 FWD, max 3 per club
