@@ -80,17 +80,38 @@ def test_old_snapshot_exceeds_max_age(monkeypatch):
     assert stale and "old" in reason
 
 
+def test_near_deadline_tightens_the_freshness_bar(monkeypatch):
+    """refresh must replace what verify would reject, or daily blocks forever."""
+    now = datetime(2026, 8, 21, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(data, "snapshot_fetched_at",
+                        lambda name, day=None: now - timedelta(hours=4))
+    assert not data.is_stale("bootstrap", now)[0]                    # normal day
+    assert data.is_stale("bootstrap", now, hours_to_deadline=5.5)[0]  # deadline near
+
+
+def test_snapshot_glob_ignores_meta_sidecars(tmp_path, monkeypatch):
+    import json as _json
+    monkeypatch.setattr(config, "SNAPSHOT_DIR", tmp_path)
+    (tmp_path / "bootstrap_2026-08-11.json").write_text(_json.dumps({"elements": [1]}))
+    (tmp_path / "bootstrap_2026-08-11.meta.json").write_text(
+        _json.dumps({"fetched_at": "x", "source": "y"}))
+    day, payload = data.latest_snapshot_before("bootstrap", "2026-08-12")
+    assert day == "2026-08-11" and "elements" in payload
+
+
 # ------------------------------------------------------------- selling price
-def test_selling_price_halves_profit_rounding_down():
+def test_selling_price_halves_profits_but_takes_losses_in_full():
     players = pd.DataFrame([{"id": 1, "price": 5.4}, {"id": 2, "price": 5.0},
-                            {"id": 3, "price": 4.5}])
+                            {"id": 3, "price": 4.5}, {"id": 4, "price": 5.1}])
     squad = {"players": [{"id": 1, "purchase_price": 5.0},
                          {"id": 2, "purchase_price": 5.0},
-                         {"id": 3, "purchase_price": 5.0}]}
+                         {"id": 3, "purchase_price": 5.0},
+                         {"id": 4, "purchase_price": 5.0}]}
     sell = memoryio.squad_selling_prices(squad, players)
-    assert sell[1] == 5.2      # +0.4 profit -> +0.2
-    assert sell[2] == 5.0      # no profit
-    assert sell[3] == 5.0      # price drops never reduce below purchase gain rule
+    assert sell[1] == 5.2      # +0.4 profit -> half kept
+    assert sell[2] == 5.0      # unchanged
+    assert sell[3] == 4.5      # fallen: the full loss is taken, no purchase-price floor
+    assert sell[4] == 5.0      # +0.1 profit -> rounds down to nothing
 
 
 # ------------------------------------------------------------- fixtures model
@@ -181,6 +202,21 @@ def test_marginal_gain_is_rejected():
          "objective": 100.4},
     ]}
     assert policy.assess_transfers(plan, free_transfers=1, gws_played=20)["action"] == "hold"
+
+
+def test_best_net_gain_wins_not_the_largest_transfer_count():
+    empty = pd.DataFrame(columns=["web_name", "xmins"])
+    plan = {"plans": [
+        {"n_transfers": 0, "net_gain_vs_hold": 0.0, "hit_cost": 0,
+         "out": empty, "in": empty, "objective": 100},
+        {"n_transfers": 1, "net_gain_vs_hold": 5.0, "hit_cost": 0,
+         "out": empty, "in": empty, "objective": 105},
+        {"n_transfers": 2, "net_gain_vs_hold": 4.2, "hit_cost": 0,
+         "out": empty, "in": empty, "objective": 104.2},
+    ]}
+    d = policy.assess_transfers(plan, free_transfers=2, gws_played=20)
+    assert d["action"] == "1_transfer"
+    assert d["plan"]["net_gain_vs_hold"] == 5.0
 
 
 def test_hit_on_minutes_capped_player_is_blocked():

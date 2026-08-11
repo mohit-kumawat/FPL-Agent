@@ -16,7 +16,7 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from fpl_agent import backtest, config, optimizer, policy, replay  # noqa: E402
+from fpl_agent import backtest, config, memoryio, optimizer, policy, replay  # noqa: E402
 
 OUT: list[str] = []
 
@@ -51,11 +51,11 @@ def simulate(season: str, max_gw: int = 38, transfers: bool = True) -> dict:
         mine = ep[ep["id"].isin(squad_ids)]
 
         if transfers and gw > 1 and len(mine) == config.SQUAD_SIZE:
-            now_price = ep.set_index("id")["price"]
-            sell = {pid: round(purchase[pid]
-                               + max(0, round((now_price.get(pid, purchase[pid])
-                                               - purchase[pid]) * 10) // 2) / 10, 1)
-                    for pid in squad_ids}
+            # use the production rule, never a local copy of it
+            sell = memoryio.squad_selling_prices(
+                {"players": [{"id": pid, "purchase_price": purchase[pid]}
+                             for pid in squad_ids]},
+                ep)
             try:
                 plan = optimizer.plan_transfers(ep, squad_ids, sell, bank=bank,
                                                 free_transfers=fts, max_transfers=2)

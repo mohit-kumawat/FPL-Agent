@@ -1,18 +1,20 @@
 # Strategy-return simulation (point-in-time, no hindsight)
 
 ## 2024-25
-- **agent strategy**: 2284 pts (43 transfers, 32 hit pts, 60.9 raw pts/GW)
-- hold-GW1-squad baseline: 1885 pts
-- transfer engine added: +399 pts
+- **agent strategy**: 2232 pts (48 transfers, 52 hit pts, 60.1 raw pts/GW)
+- hold-GW1-squad baseline: 1884 pts
+- transfer engine added: +348 pts
 - reference: winner ~2,810 | top-10k ~2,450 | overall average ~2,100
 
 ## 2023-24
-- **agent strategy**: 2195 pts (53 transfers, 72 hit pts, 59.7 raw pts/GW)
-- hold-GW1-squad baseline: 1944 pts
-- transfer engine added: +251 pts
+- **agent strategy**: 2267 pts (54 transfers, 68 hit pts, 61.4 raw pts/GW)
+- hold-GW1-squad baseline: 1939 pts
+- transfer engine added: +328 pts
 - reference: winner ~2,799 | overall average ~2,030
 - note (both seasons): no chips, no autosubs in either arm; chips typically add 30-60 pts
-- observation: 72 hit points in 2023/24 vs 32 in 2024/25 — the hit threshold may deserve a higher bar; logged as hypothesis
+- these figures were re-run after the selling-price fix (losses are now taken in
+  full, as FPL does) and the transfer-plan selection fix. Prior published numbers
+  (2,284 / 2,195) were computed under an inflated budget and are superseded.
 
 ## Lambda-grid robustness (Model A recency vs Model B ridge)
 

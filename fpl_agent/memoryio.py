@@ -50,14 +50,21 @@ def load_squad() -> dict:
 
 
 def squad_selling_prices(squad: dict, players: pd.DataFrame) -> dict[int, float]:
-    """Selling price = purchase + floor(profit / 2) in 0.1m steps."""
+    """FPL selling price: profits are halved, losses are taken in full.
+
+    Rises: purchase + floor(profit / 2) in 0.1m steps.
+    Falls: the current price — there is no floor at the purchase price.
+    """
     out: dict[int, float] = {}
     now = players.set_index("id")["price"]
     for p in squad.get("players", []) or []:
         pid, buy = int(p["id"]), float(p["purchase_price"])
         cur = float(now.get(pid, buy))
-        profit_tenths = max(0, round((cur - buy) * 10))
-        out[pid] = round(buy + (profit_tenths // 2) / 10, 1)
+        if cur < buy:
+            out[pid] = round(cur, 1)
+        else:
+            profit_tenths = round((cur - buy) * 10)
+            out[pid] = round(buy + (profit_tenths // 2) / 10, 1)
     return out
 
 

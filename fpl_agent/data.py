@@ -93,8 +93,14 @@ def last_price_change(now: datetime | None = None) -> datetime:
     return boundary
 
 
-def is_stale(name: str, now: datetime | None = None) -> tuple[bool, str]:
-    """Is the cached snapshot too old to trust for prices? (stale, reason)."""
+def is_stale(name: str, now: datetime | None = None,
+             hours_to_deadline: float | None = None) -> tuple[bool, str]:
+    """Is the cached snapshot too old to trust for prices? (stale, reason).
+
+    Near a deadline the bar tightens to DEADLINE_FRESH_HOURS so that refresh
+    satisfies what verify demands — otherwise the daily run blocks itself on
+    data it refuses to replace.
+    """
     now = now or datetime.now(timezone.utc)
     fetched = snapshot_fetched_at(name)
     if fetched is None:
@@ -102,9 +108,12 @@ def is_stale(name: str, now: datetime | None = None) -> tuple[bool, str]:
     if fetched < last_price_change(now):
         return True, (f"fetched {fetched:%Y-%m-%d %H:%MZ}, before the "
                       f"{last_price_change(now):%H:%MZ} price change")
+    max_age = config.MAX_SNAPSHOT_AGE_HOURS
+    if hours_to_deadline is not None and 0 < hours_to_deadline <= 24:
+        max_age = config.DEADLINE_FRESH_HOURS
     age_h = (now - fetched).total_seconds() / 3600
-    if age_h > config.MAX_SNAPSHOT_AGE_HOURS:
-        return True, f"snapshot is {age_h:.1f}h old (max {config.MAX_SNAPSHOT_AGE_HOURS}h)"
+    if age_h > max_age:
+        return True, f"snapshot is {age_h:.1f}h old (max {max_age}h)"
     return False, f"fresh ({age_h:.1f}h old, after last price change)"
 
 
@@ -116,8 +125,14 @@ def load_snapshot(name: str, day: str | None = None) -> Any | None:
 
 
 def latest_snapshot_before(name: str, day: str) -> tuple[str, Any] | None:
-    """Most recent snapshot strictly before `day` (for diffing)."""
-    candidates = sorted(config.SNAPSHOT_DIR.glob(f"{name}_*.json"))
+    """Most recent snapshot strictly before `day` (for diffing).
+
+    The glob must exclude the `.meta.json` sidecars — they match `{name}_*.json`
+    and sort after the real payload, so an unfiltered glob hands a metadata dict
+    to detect_changes.
+    """
+    candidates = sorted(p for p in config.SNAPSHOT_DIR.glob(f"{name}_*.json")
+                        if not p.name.endswith(".meta.json"))
     prev = [p for p in candidates if p.stem.split("_")[-1] < day]
     if not prev:
         return None
@@ -134,9 +149,19 @@ def refresh(force: bool = False) -> dict:
     boundary or exceeds MAX_SNAPSHOT_AGE_HOURS. `freshness` is returned so the
     report can state, per run, how current the prices are.
     """
-    stale, reason = is_stale("bootstrap")
+    # peek at the cached copy for the next deadline so the freshness bar can
+    # tighten near it (deadlines are stable, so a cached read is safe here)
+    cached = load_snapshot("bootstrap")
+    hours_to_deadline = None
+    if cached:
+        nxt = next((e for e in cached.get("events", []) if e.get("is_next")), None)
+        if nxt:
+            dl = datetime.fromisoformat(nxt["deadline_time"].replace("Z", "+00:00"))
+            hours_to_deadline = (dl - datetime.now(timezone.utc)).total_seconds() / 3600
+
+    stale, reason = is_stale("bootstrap", hours_to_deadline=hours_to_deadline)
     need = force or stale
-    boot = None if need else load_snapshot("bootstrap")
+    boot = None if need else cached
     fixtures = None if need else load_snapshot("fixtures")
     refetched = False
     if boot is None:

@@ -47,7 +47,10 @@ def assess_transfers(plan: dict, free_transfers: int, gws_played: int = 38) -> d
             "net_gain_vs_hold": best_alt["net_gain_vs_hold"],
         }
 
-    for p in sorted(plans, key=lambda q: q["n_transfers"]):
+    # collect every plan that clears its own bar, then take the best net gain —
+    # iterating and overwriting would recommend the largest passing k instead
+    passing: list[tuple[dict, float, bool, pd.DataFrame]] = []
+    for p in plans:
         k = p["n_transfers"]
         if k == 0:
             continue
@@ -62,20 +65,28 @@ def assess_transfers(plan: dict, free_transfers: int, gws_played: int = 38) -> d
             continue
 
         if gain >= threshold:
-            decision = {
-                **decision,
-                "action": f"{k}_transfer{'s' if k > 1 else ''}",
-                "plan": p,
-                "reasoning": [
-                    f"[MODEL] {k} transfer(s) adds {gain:+.1f} EP over "
-                    f"{config.HORIZON_GWS} GWs net of hits (dynamic threshold {threshold:.1f}; "
-                    f"gws_played={gws_played}, FTs={free_transfers})."
-                ],
-            }
-            if is_hit and len(capped):
-                decision["reasoning"].append(
-                    f"[MODEL] hit includes minutes-capped {list(capped['web_name'])} "
-                    "but gain clears the bar by >25% — verify fitness before acting.")
+            passing.append((p, threshold, is_hit, capped))
+
+    if passing:
+        # tie-break toward fewer transfers: keeps a banked FT when gains match
+        p, threshold, is_hit, capped = max(
+            passing, key=lambda t: (t[0]["net_gain_vs_hold"], -t[0]["n_transfers"]))
+        k = p["n_transfers"]
+        gain = p["net_gain_vs_hold"]
+        decision = {
+            **decision,
+            "action": f"{k}_transfer{'s' if k > 1 else ''}",
+            "plan": p,
+            "reasoning": [
+                f"[MODEL] {k} transfer(s) adds {gain:+.1f} EP over "
+                f"{config.HORIZON_GWS} GWs net of hits (dynamic threshold {threshold:.1f}; "
+                f"gws_played={gws_played}, FTs={free_transfers})."
+            ],
+        }
+        if is_hit and len(capped):
+            decision["reasoning"].append(
+                f"[MODEL] hit includes minutes-capped {list(capped['web_name'])} "
+                "but gain clears the bar by >25% — verify fitness before acting.")
     if decision["action"] == "hold":
         why = (f"best alternative: {best_alt['n_transfers']} moves "
                f"{best_alt['net_gain_vs_hold']:+.1f} EP vs bar {ft_min:.1f}"

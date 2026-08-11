@@ -7,8 +7,8 @@ news research, memory, talking to you). Every recommendation is sourced-tagged,
 logged, and reproducible.
 
 Validated by point-in-time replay of past seasons — no hindsight, structurally
-enforced. On 2024/25 the exact pipeline scored **2,284 points** without chips;
-on 2023/24, **2,195**.
+enforced. On 2024/25 the exact pipeline scored **2,232 points** without chips (2,267 on
+2023/24), against an overall average of roughly 2,100.
 
 ```bash
 git clone <your-fork-url> && cd FPL
@@ -86,6 +86,7 @@ these holds (`data.is_stale`, unit-tested in `tests/test_pipeline.py`):
 | No snapshot today | fetch |
 | Snapshot taken **before** the last 01:30 UTC boundary | **refetch** — this is the price-change guarantee |
 | Snapshot older than `MAX_SNAPSHOT_AGE_HOURS` (12h) | refetch |
+| Within 24h of a deadline and older than `DEADLINE_FRESH_HOURS` (3h) | refetch — the bar tightens to match what verification demands |
 | `fpl refresh` or `fpl daily --force` | refetch unconditionally |
 
 Every snapshot is written with a sidecar `*.meta.json` recording the real fetch
@@ -101,8 +102,15 @@ deliberately not modelled — they're a different problem, and acting on them is
 a strategy choice, not a data one.
 
 **Selling price rule** (why purchase prices live in squad.yaml — the public API
-never exposes selling prices): `sell = purchase + floor((now − purchase)/2)`,
-computed in 0.1m steps by `memoryio.squad_selling_prices`.
+never exposes selling prices), computed in 0.1m steps by
+`memoryio.squad_selling_prices`:
+
+- price **rose**: `sell = purchase + floor((now − purchase) / 2)` — profits halved
+- price **fell**: `sell = now` — losses are taken in full, there is no floor at
+  the purchase price
+
+Getting the second case wrong inflates the transfer budget and makes the
+optimizer propose squads you cannot actually afford.
 
 ---
 
@@ -413,11 +421,11 @@ impossible, verified by assertions.
 
 Results (details in `eval/2024-25-report.md` and `eval/strategy-sim-report.md`):
 - **Full-season strategy return, two seasons:** the exact pipeline (GW1 build →
-  weekly policy-gated transfers → XI + captain) scored **2,284 pts on 2024/25**
-  (+399 vs holding) and **2,195 pts on 2023/24** (+251 vs holding) — no chips,
+  weekly policy-gated transfers → XI + captain) scored **2,232 pts on 2024/25**
+  (+348 vs holding) and **2,267 pts on 2023/24** (+328 vs holding) — no chips,
   no autosubs. Both well above the overall average (~2,030-2,100), below top-10k
   pace (~2,450): an honest gap the roadmap targets. One flagged hypothesis: the
-  hit bar may need raising in high-churn seasons (72 hit pts in 23/24 vs 32).
+  hit bar may need raising in high-churn seasons (68 hit pts in 23/24 vs 52).
 - **GW6–24 sweep (component model + logistic appearance):** captain averaged
   **10.21 pts/GW** (63% of the top-6 ceiling); model top-11 averaged **5.59
   actual pts/player/GW**

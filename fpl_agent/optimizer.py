@@ -176,7 +176,9 @@ def plan_transfers(players: pd.DataFrame, current_ids: list[int],
             "n_transfers": k,
             "hit_cost": hit,
             "objective": round(obj, 2),
-            "net_gain_vs_hold": round(obj - hit - (base_ep or obj), 2),
+            # `or` would treat a legitimate 0.0 hold objective as missing
+            "net_gain_vs_hold": round(
+                obj - hit - (base_ep if base_ep is not None else obj), 2),
             "out": cur[~cur["id"].isin(squad["id"])],
             "in": squad[~squad["id"].isin(current_ids)],
             "squad": squad,

@@ -33,7 +33,7 @@ Current baseline to beat (2024/25, GW6–24):
 | Top-11 actual | 5.59 pts/player/GW |
 | Spearman ρ (starters) | 0.364 |
 | p10–p90 coverage | 0.83 (target 0.80) |
-| Season strategy return | 2,284 (24/25) · 2,195 (23/24) |
+| Season strategy return | 2,232 (24/25) · 2,267 (23/24) |
 
 ## Things that will get a PR rejected
 

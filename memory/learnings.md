@@ -16,10 +16,12 @@ until tested — the agent must not act on them.
   then B best/A worst). λ=0.6 is the maximin (worst-case top-11 4.14).
   The earlier λ=0.7 choice was overfit to one season — a caught mistake, kept
   here as a warning.
-- **Strategy return, two full seasons**: 2024/25 = 2,284 pts (43 transfers,
-  32 hit pts), +399 vs hold; 2023/24 = 2,195 pts (53 transfers, 72 hit pts),
-  +251 vs hold. No chips/autosubs in either arm. Both seasons comfortably above
-  the overall average (~2,030-2,100); below top-10k pace (~2,450) — honest gap.
+- **Strategy return, two full seasons** (post selling-price + plan-selection
+  fixes): 2024/25 = 2,232 pts (48 transfers, 52 hit pts), +348 vs hold;
+  2023/24 = 2,267 pts (54 transfers, 68 hit pts), +328 vs hold. No chips/autosubs
+  in either arm. Both comfortably above the overall average (~2,030-2,100);
+  below top-10k pace (~2,450) — honest gap. Superseded earlier figures of
+  2,284/2,195, which were inflated by a selling-price bug.
 - **Early-season data thresholds must self-scale** — fixed 900-minute history
   gate produced all-NaN EP at GW9/10 (caught by replay suite; fixed).
 
@@ -41,8 +43,8 @@ until tested — the agent must not act on them.
 ## HYPOTHESES (untested — do NOT act on these)
 
 - The hit threshold may be too loose in high-churn seasons: 2023/24 sim took
-  72 hit points vs 32 in 2024/25 for less transfer-engine gain (+251 vs +399).
-  Test: rerun strategy_sim with HIT_GAIN_MIN 7-8 before changing config.
+  68 hit points vs 52 in 2024/25 for slightly less transfer-engine gain
+  (+328 vs +348). Test: rerun strategy_sim with HIT_GAIN_MIN 7-8 first.
 
 - Variance-seeking captaincy ("differential mode") may beat EP-max when chasing
   rank late-season. Needs a rank-simulation study before use.

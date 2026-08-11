@@ -90,7 +90,9 @@ def run_daily(force: bool = False) -> dict:
             "findings": [f"[DATA] BLOCKER: {b}" for b in ver["blockers"]],
             "recommendation": None, "rating": None,
         }
-        memoryio.log_run({"kind": "daily", "triggers": ["blocked"],
+        # logged under a distinct kind: a blocked run must NOT mark the day
+        # done, or the fix-and-retry the blocker asks for is silently skipped
+        memoryio.log_run({"kind": "daily_blocked", "triggers": ["blocked"],
                           "blockers": ver["blockers"]})
         md_path, json_path = report.write_report(ctx_blocked)
         return {**ctx_blocked, "report_md": str(md_path), "report_json": str(json_path)}
