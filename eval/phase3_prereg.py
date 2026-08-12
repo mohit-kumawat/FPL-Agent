@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -124,12 +125,9 @@ def _gw_actuals(gw: int) -> tuple[dict[str, float], dict[str, float]] | None:
     if panel.empty or panel["round"].max() < gw:
         return None
     g = panel[panel["round"] == gw].groupby("element")[["total_points", "minutes"]].sum()
-    names: dict[int, str] = {}
-    dupes: set[str] = set()
-    for el in boot["elements"]:
-        if el["web_name"] in names.values():
-            dupes.add(el["web_name"])
-        names[el["id"]] = el["web_name"]
+    names = {el["id"]: el["web_name"] for el in boot["elements"]}
+    counts = Counter(names.values())
+    dupes = {n for n, c in counts.items() if c > 1}
     pts: dict[str, float] = {}
     mins: dict[str, float] = {}
     for pid, row in g.iterrows():

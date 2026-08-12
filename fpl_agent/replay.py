@@ -11,6 +11,8 @@ pipeline uses, so a replay validates the real agent, not a lookalike.
 """
 from __future__ import annotations
 
+from functools import lru_cache
+
 import numpy as np
 import pandas as pd
 
@@ -20,7 +22,20 @@ _POS_MAP = {"GK": 1, "GKP": 1, "DEF": 2, "MID": 3, "FWD": 4}
 _VALID_POS = set(_POS_MAP)
 
 
+# Every replay entry point funnels through here — snapshot_at, panel_before,
+# actual_points, actual_minutes, prior aggregates — so an uncached version
+# re-read the season parquet and re-coerced twelve columns several times per
+# gameweek. Returns a defensive copy so callers can mutate freely.
+@lru_cache(maxsize=8)
+def _season_gws_cached(season: str) -> pd.DataFrame:
+    return _season_gws_uncached(season)
+
+
 def _season_gws(season: str) -> pd.DataFrame:
+    return _season_gws_cached(season).copy()
+
+
+def _season_gws_uncached(season: str) -> pd.DataFrame:
     df = data.load_prior_season(season).copy()
     if "round" not in df.columns and "GW" in df.columns:
         df = df.rename(columns={"GW": "round"})

@@ -35,7 +35,7 @@ and produces recommendations for a human to act on.
 |---|---|
 | Docs | This file (full reference) · [AGENT.md](AGENT.md) (agent runbook) · [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Evidence | [eval/2024-25-report.md](eval/2024-25-report.md) · [eval/strategy-sim-report.md](eval/strategy-sim-report.md) · [eval/ablation-report.md](eval/ablation-report.md) |
-| Tests | `uv run pytest -q` (84 offline tests) · `uv run python eval/run_backtests.py` (replay suite) |
+| Tests | `uv run pytest -q` (95 offline tests) · `uv run python eval/run_backtests.py` (replay suite) |
 | Licence | MIT |
 
 *The rest of this file is the complete technical reference: exactly what the code
@@ -48,7 +48,7 @@ does not measure.*
 
 ## 1. What this is
 
-- **Deterministic pipeline** (`fpl_agent/`, ~3,400 lines, Python 3.13 + pandas +
+- **Deterministic pipeline** (`fpl_agent/`, ~3,500 lines, Python 3.13 + pandas +
   scikit-learn + PuLP): data collection, change detection, expected points, squad
   optimisation, Monte Carlo outcomes, decision policy, reports, memory. Same
   input, same output, always (simulation included — it is seeded).
@@ -64,15 +64,15 @@ Module map:
 
 | Module | Lines | Responsibility |
 |---|---|---|
+| `policy.py` | 395 | Decision thresholds, captaincy + strategy modes, chip EV, price timing, flags |
 | `data.py` | 365 | API client, snapshots, price-freshness logic, change detection, history loaders |
-| `models.py` | 329 | Minutes model + distribution (p_start/p_60/p_bench), prior tier, ensemble, component EP |
-| `policy.py` | 347 | Decision thresholds, captaincy + strategy modes, chip EV, price timing, flags |
-| `memoryio.py` | 318 | State, decisions, predictions, signal roles/validation, chip scenarios |
-| `replay.py` | 253 | Point-in-time historical reconstruction with leakage assertions |
-| `report.py` | 239 | Markdown + JSON report writer |
+| `models.py` | 345 | Minutes model + distribution (p_start/p_60/p_bench), prior tier, ensemble, component EP |
+| `memoryio.py` | 335 | State, decisions, predictions, signal roles/validation, chip scenarios |
+| `replay.py` | 268 | Point-in-time historical reconstruction with leakage assertions |
+| `report.py` | 257 | Markdown + JSON report writer |
 | `daily.py` | 231 | Orchestrator: verify → detect changes → trigger matrix → policy |
 | `optimizer.py` | 193 | Three PuLP integer programs (build / XI / transfers) |
-| `simulate.py` | 178 | Seeded Monte Carlo point distributions (haul/blank tails, captaincy) |
+| `simulate.py` | 190 | Seeded Monte Carlo point distributions (haul/blank tails, captaincy) |
 | `features.py` | 160 | Fixture channels, set-piece flags, rolling form |
 | `lifecycle.py` | 160 | Gameweek stage machine and pending items |
 | `verify.py` | 140 | Pre-flight state verification (blocking) |
@@ -447,10 +447,21 @@ uv run fpl rate                   # grade squad.yaml against optimal
 uv run fpl pending [list|add <text>|done <substr>]
 uv run fpl backtest               # model A/B/ensemble, out-of-sample
 uv run fpl refresh                # force re-fetch
-uv run pytest -q                  # 84 offline tests, no network
+uv run pytest -q                  # 95 offline tests, no network
 uv run python eval/run_backtests.py    # point-in-time replay suite
 uv run python eval/strategy_sim.py     # full-season strategy return
+uv run python eval/ablation.py         # ablation ladder + bootstrap CIs
+uv run python eval/agent_backtest.py   # leak audit + GW1-10 benchmark arms
+uv run python eval/phase3_prereg.py score   # score sealed forward predictions
 ```
+
+Every arm in every eval script plays the season through one shared loop
+(`eval/season_loop.py`) — GW1 build, policy-gated weekly transfers, XI and
+captain, autosub-aware scoring. That is deliberate: three hand-synced copies of
+this loop had already drifted on free-transfer rules and hit accounting, which
+would have made the arms quietly incomparable. Its frame caches are cleared
+around the leak audit's monkeypatching, since a cached pre-patch frame would
+make a real hindsight leak look clean.
 
 ---
 
@@ -549,8 +560,13 @@ underperforms.
   default prior). Free Hit and Wildcard remain structural advice; nothing
   optimises a chip route across the whole season.
 - **Ownership enters captaincy only.** `safe` / `balanced` / `chase` modes can
-  hand the armband to a close differential, but transfers and squad structure
-  are ownership-blind, and effective ownership (top-10k) has no data source.
+  hand the armband to a close differential (moving the vice with it), but
+  transfers and squad structure are ownership-blind, and effective ownership
+  (top-10k) has no data source.
+- **Cold-start history flags only fire preseason.** Bootstrap `minutes` holds
+  prior-season totals until GW1 is processed, then resets to the current season
+  — so "has almost no league history" is unanswerable from GW2 onward and is not
+  guessed at. Between GW1 and GW3 only the rotation-zone and regime notes fire.
 - **The transfer horizon is five gameweeks of expected points.** It does not
   optimise team value, future purchasing power, or a route into a future
   premium. Price-change timing advice exists, but it decorates moves the model

@@ -29,7 +29,8 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from fpl_agent import config, memoryio, optimizer, policy, replay, scoring  # noqa: E402
+from fpl_agent import config  # noqa: E402
+from season_loop import run_season  # noqa: E402
 
 SEED = 20260812
 N_BOOT = 5000
@@ -79,64 +80,14 @@ ARMS: dict[str, tuple] = {
 
 # -------------------------------------------------------------- season loop
 def run_arm(season: str, transform, use_policy: bool, max_gw: int = 38) -> dict:
-    """One arm through one season; per-GW autosub-aware actual points."""
-    ep1 = transform(replay.expected_points_at(season, 1))
-    b = optimizer.build_squad(ep1)
-    squad_ids = list(b["squad"]["id"])
-    purchase = dict(zip(b["squad"]["id"], b["squad"]["price"]))
-    bank = round(config.BUDGET - b["cost"], 1)
-    fts, hits, moves = 1, 0, 0
-    weekly: list[float] = []
+    """One arm through the shared eval season loop (eval/season_loop.py).
 
-    for gw in range(1, max_gw + 1):
-        ep = transform(replay.expected_points_at(season, gw))
-        act = replay.actual_points(season, gw)
-        mine = ep[ep["id"].isin(squad_ids)]
-        hit_now = 0
-
-        if gw > 1 and len(mine) == config.SQUAD_SIZE:
-            sell = memoryio.squad_selling_prices(
-                {"players": [{"id": p, "purchase_price": purchase[p]} for p in squad_ids]}, ep)
-            try:
-                plan = optimizer.plan_transfers(ep, squad_ids, sell, bank=bank,
-                                                free_transfers=fts, max_transfers=2)
-                if use_policy:
-                    dec = policy.assess_transfers(plan, fts, gws_played=gw - 1)
-                else:
-                    best = plan["best"]
-                    dec = ({"action": f"{best['n_transfers']}_transfers", "plan": best}
-                           if best["n_transfers"] > 0 and best["net_gain_vs_hold"] > 0
-                           else {"action": "hold", "plan": None})
-            except Exception:  # noqa: BLE001 — infeasible week: hold
-                dec = {"action": "hold", "plan": None}
-            if dec["action"] != "hold" and dec["plan"] is not None:
-                p = dec["plan"]
-                out_ids = list(p["out"]["id"])
-                bank = round(bank + sum(sell[i] for i in out_ids)
-                             - float(p["in"]["price"].sum()), 1)
-                for i in out_ids:
-                    squad_ids.remove(i); purchase.pop(i, None)
-                for r in p["in"].itertuples():
-                    squad_ids.append(int(r.id)); purchase[int(r.id)] = float(r.price)
-                moves += p["n_transfers"]
-                hit_now = max(0, p["n_transfers"] - fts) * config.TRANSFER_HIT
-                hits += hit_now
-                fts = min(config.MAX_FREE_TRANSFERS, max(0, fts - p["n_transfers"]) + 1)
-            else:
-                fts = min(config.MAX_FREE_TRANSFERS, fts + 1)
-            mine = ep[ep["id"].isin(squad_ids)]
-
-        if len(mine) == config.SQUAD_SIZE:
-            s = scoring.gw_score(optimizer.pick_xi(mine),
-                                 replay.actual_minutes(season, gw), act)
-            pts = s["autosub"]
-        else:
-            pts = 0.0
-        # hits are charged in the GW they were taken so per-GW pairing sees them
-        weekly.append(pts - hit_now)
-
-    return {"weekly": weekly, "hits": hits, "moves": moves,
-            "total": round(sum(weekly))}
+    `weekly` is the autosub-aware score with each hit charged in the gameweek it
+    was taken, which is what the per-GW bootstrap pairs on."""
+    r = run_season(season, max_gw=max_gw, transform=transform,
+                   use_policy=use_policy)
+    return {"weekly": r["weekly_net"], "hits": r["hits"], "moves": r["moves"],
+            "total": round(sum(r["weekly_net"]))}
 
 
 # ---------------------------------------------------------------- statistics

@@ -21,7 +21,9 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from fpl_agent import config, data, memoryio, optimizer, policy, replay, scoring  # noqa: E402
+import season_loop  # noqa: E402
+from fpl_agent import config, data, replay  # noqa: E402
+from season_loop import run_season  # noqa: E402
 
 OUT: list[str] = []
 SEED = 20260812
@@ -90,11 +92,15 @@ def leak_audit(season: str, gws: int = GWS) -> list[dict]:
                     d[col] = 0
             return d
 
+        # Caches must not straddle the patch in either direction: a pre-patch
+        # frame served to patched code would make a genuine leak look clean.
+        season_loop.clear_caches()
         replay._season_gws = truncated
         try:
             cut = replay.expected_points_at(season, gw)
         finally:
             replay._season_gws = original
+            season_loop.clear_caches()
 
         cols = [c for c in ("id", "ep_next", "ep_horizon", "xmins", "price")
                 if c in full.columns and c in cut.columns]
@@ -113,58 +119,16 @@ def leak_audit(season: str, gws: int = GWS) -> list[dict]:
 
 # ----------------------------------------------------------------- phase 1
 def run_arm(season: str, max_gw: int = GWS, transfers: bool = True) -> dict:
-    """The pipeline arm: identical code path to eval/strategy_sim, per-GW output."""
-    b = replay.build_at(season, 1)
-    squad_ids = list(b["squad"]["id"])
-    purchase = dict(zip(b["squad"]["id"], b["squad"]["price"]))
-    bank = round(config.BUDGET - b["cost"], 1)
-    fts, hits, moves = 1, 0, 0
-    weekly, weekly_sub, ceiling = [], [], []
-
-    for gw in range(1, max_gw + 1):
-        ep = replay.expected_points_at(season, gw)
-        act = replay.actual_points(season, gw)
-        mine = ep[ep["id"].isin(squad_ids)]
-
-        if transfers and gw > 1 and len(mine) == config.SQUAD_SIZE:
-            sell = memoryio.squad_selling_prices(
-                {"players": [{"id": p, "purchase_price": purchase[p]} for p in squad_ids]}, ep)
-            try:
-                plan = optimizer.plan_transfers(ep, squad_ids, sell, bank=bank,
-                                                free_transfers=fts, max_transfers=2)
-                dec = policy.assess_transfers(plan, fts, gws_played=gw - 1)
-            except Exception:  # noqa: BLE001
-                dec = {"action": "hold", "plan": None}
-            if dec["action"] != "hold" and dec["plan"] is not None:
-                p = dec["plan"]
-                out_ids = list(p["out"]["id"])
-                spend = float(p["in"]["price"].sum())
-                bank = round(bank + sum(sell[i] for i in out_ids) - spend, 1)
-                for i in out_ids:
-                    squad_ids.remove(i); purchase.pop(i, None)
-                for r in p["in"].itertuples():
-                    squad_ids.append(int(r.id)); purchase[int(r.id)] = float(r.price)
-                moves += p["n_transfers"]
-                hits += max(0, p["n_transfers"] - fts) * config.TRANSFER_HIT
-                fts = min(config.MAX_FREE_TRANSFERS, max(0, fts - p["n_transfers"]) + 1)
-            else:
-                fts = min(config.MAX_FREE_TRANSFERS, fts + 1)
-            mine = ep[ep["id"].isin(squad_ids)]
-
-        if len(mine) == config.SQUAD_SIZE:
-            s = scoring.gw_score(optimizer.pick_xi(mine),
-                                 replay.actual_minutes(season, gw), act)
-            weekly.append(s["raw"])
-            weekly_sub.append(s["autosub"])
-        else:
-            weekly.append(0.0)
-            weekly_sub.append(0.0)
-        ceiling.append(best_xi_from(mine, act))
-
-    return {"total": round(sum(weekly) - hits), "raw": round(sum(weekly)),
-            "hits": hits, "moves": moves, "weekly": [round(w) for w in weekly],
-            "autosub_total": round(sum(weekly_sub) - hits),
-            "ceiling": round(sum(ceiling))}
+    """The pipeline arm, through the shared eval season loop (eval/season_loop.py)."""
+    r = run_season(season, max_gw=max_gw, transfers=transfers)
+    # selection ceiling: the perfect XI from the squad actually held each GW
+    ceiling = sum(best_xi_from(sq, replay.actual_points(season, gw + 1))
+                  for gw, sq in enumerate(r["squads"]))
+    return {"total": r["total_raw"], "raw": round(sum(r["weekly_raw"])),
+            "hits": r["hits"], "moves": r["moves"],
+            "weekly": [round(w) for w in r["weekly_raw"]],
+            "autosub_total": r["total_autosub"],
+            "ceiling": round(ceiling)}
 
 
 def _valid_xi(rows: list[tuple[int, str, float]]) -> float:

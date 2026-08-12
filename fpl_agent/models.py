@@ -109,7 +109,24 @@ def _history_threshold(df: pd.DataFrame) -> float:
     return min(MIN_PRIOR_MINUTES, max(90.0, 0.5 * max_mins))
 
 
-def prior_baseline(df: pd.DataFrame) -> pd.Series:
+def cross_regime(df: pd.DataFrame, explicit: bool | None = None) -> bool:
+    """Does this frame's prior-season data cross a scoring-rules boundary?
+
+    Resolution order: an explicit argument wins; otherwise the frame's
+    `prior_rules_cross` column (set by features.enrich_players and
+    replay.snapshot_at); otherwise fall back to comparing the configured
+    prior and current seasons, so a frame assembled by some other code path
+    still gets the right regime rather than silently defaulting to
+    same-regime weighting.
+    """
+    if explicit is not None:
+        return bool(explicit)
+    if "prior_rules_cross" in df.columns:
+        return bool(df["prior_rules_cross"].any())
+    return config.rules_cross_regime(config.PRIOR_SEASON, config.CURRENT_SEASON)
+
+
+def prior_baseline(df: pd.DataFrame, cross: bool | None = None) -> pd.Series:
     """Points-per-game prior for every player (Tier P)."""
     has_prior = df["minutes"] >= _history_threshold(df)
     ppg = pd.to_numeric(df["points_per_game"], errors="coerce").fillna(0.0)
@@ -132,10 +149,9 @@ def prior_baseline(df: pd.DataFrame) -> pd.Series:
 
     # realized vs process blend (regresses hot/cold outcomes to underlying
     # stats). Across a scoring-regime change the realized PPG embeds points
-    # earned under rules that no longer apply, so weight shifts to process
-    # stats; callers mark provenance via the prior_rules_cross column.
-    cross = bool(df["prior_rules_cross"].any()) if "prior_rules_cross" in df.columns else False
-    w_ppg = config.PPG_PRIOR_WEIGHT_CROSS_REGIME if cross else config.PPG_PRIOR_WEIGHT
+    # earned under rules that no longer apply, so weight shifts to process stats.
+    w_ppg = (config.PPG_PRIOR_WEIGHT_CROSS_REGIME if cross_regime(df, cross)
+             else config.PPG_PRIOR_WEIGHT)
     prior = w_ppg * ppg + (1 - w_ppg) * ridge_pred.fillna(ppg)
 
     # fallback tier: position x price bucket median for players without history

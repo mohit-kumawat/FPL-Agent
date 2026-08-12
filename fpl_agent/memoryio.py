@@ -166,6 +166,21 @@ def _signal_expiry(doc: dict) -> datetime | None:
         return None
 
 
+def adjustment_bounds(adj: dict) -> dict:
+    """Minutes bounds implied by one adjustment: the role's defaults with any
+    explicit xmins_min/xmins_max layered on top.
+
+    Single source of truth for BOTH validation and application — computing the
+    bounds only at apply time let a role floor contradicting an explicit cap
+    slip past validate_signal_doc entirely.
+    """
+    bounds = dict(SIGNAL_ROLES.get(adj.get("role"), {}))
+    for k in ("xmins_min", "xmins_max"):
+        if adj.get(k) is not None:
+            bounds[k] = float(adj[k])
+    return bounds
+
+
 def validate_signal_doc(doc: dict, filename: str = "?") -> list[str]:
     """Structural problems that make a signal unsafe to apply."""
     problems: list[str] = []
@@ -183,13 +198,18 @@ def validate_signal_doc(doc: dict, filename: str = "?") -> list[str]:
         if role is not None and role not in SIGNAL_ROLES:
             problems.append(f"{where}: unknown role '{role}' — valid: "
                             + ", ".join(sorted(SIGNAL_ROLES)))
-        lo, hi = adj.get("xmins_min"), adj.get("xmins_max")
+        # validate the EFFECTIVE bounds, so a role default that contradicts an
+        # explicit bound is rejected like any other contradiction
+        eff = adjustment_bounds(adj)
+        lo, hi = eff.get("xmins_min"), eff.get("xmins_max")
         for name, v in (("xmins_min", lo), ("xmins_max", hi)):
             if v is not None and not 0.0 <= float(v) <= 1.0:
                 problems.append(f"{where}: {name}={v} outside [0, 1]")
         if lo is not None and hi is not None and float(lo) > float(hi):
+            via = f" (role '{role}' implies " if role else " ("
             problems.append(
-                f"{where}: xmins_min={lo} > xmins_max={hi} — contradictory bounds")
+                f"{where}: xmins_min={lo} > xmins_max={hi} — contradictory bounds"
+                + (f"{via}{SIGNAL_ROLES.get(role, {})})" if role else ")"))
         ep = adj.get("ep_per_gw")
         if ep is not None and abs(float(ep)) > EP_NUDGE_LIMIT:
             problems.append(
@@ -256,10 +276,7 @@ def load_signals(now: datetime | None = None) -> tuple[pd.DataFrame, list[dict]]
             pid = int(adj["player_id"])
             r = rows.setdefault(pid, {"ep_per_gw": 0.0, "xmins_min": None, "xmins_max": None})
             r["ep_per_gw"] += weight * float(adj.get("ep_per_gw", 0.0))
-            bounds = dict(SIGNAL_ROLES.get(adj.get("role"), {}))
-            for k in ("xmins_min", "xmins_max"):   # explicit bounds merge on top
-                if adj.get(k) is not None:
-                    bounds[k] = float(adj[k])
+            bounds = adjustment_bounds(adj)   # role defaults + explicit overrides
             if bounds.get("xmins_min") is not None:
                 r["xmins_min"] = max(r["xmins_min"] or 0.0, float(bounds["xmins_min"]))
             if bounds.get("xmins_max") is not None:

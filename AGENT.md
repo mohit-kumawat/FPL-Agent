@@ -61,7 +61,11 @@ rejects the file loudly. Explicit `xmins_min` / `xmins_max` remain legal for
 facts the vocabulary can't express and override the role's default.
 
 Use a floor **or** a cap for a given player, never both — a floor above a cap
-is a contradiction and the whole file is rejected.
+is a contradiction and the whole file is rejected. This includes a floor implied
+by a `role`: `role: expected_starter` together with `xmins_max: 0.45` is
+rejected (and names the role in the reason), because "he starts" and "he plays
+under half a match" cannot both be the fact you read. Pick the one you actually
+know.
 
 `scenarios:` entries feed the chip expected-value engine: the pipeline computes
 Triple Captain / Bench Boost play-now-vs-hold EV *given* your double/blank
@@ -97,9 +101,10 @@ Add `ttl_days:` (default 14) or an explicit `expires:` date. Expired files are
 ignored automatically — never rely on remembering to delete one.
 
 **Validation is enforced.** A file is ignored in full, with the reason printed in
-the report, if it has expired, fails to parse, sets `xmins_min` above
-`xmins_max`, puts a bound outside [0, 1], or uses `ep_per_gw` beyond ±2. Check the
-report's Key findings for `⚠ ... IGNORED` after writing a signal.
+the report, if it has expired, fails to parse, names an unknown `role`, sets an
+effective `xmins_min` above `xmins_max` (role defaults included), puts a bound
+outside [0, 1], or uses `ep_per_gw` beyond ±2. Check the report's Key findings
+for `⚠ ... IGNORED` after writing a signal.
 
 ## Other commands
 

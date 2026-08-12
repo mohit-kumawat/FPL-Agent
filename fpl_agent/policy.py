@@ -129,24 +129,26 @@ def assess_captain(xi_result: dict, players: pd.DataFrame, mode: str = "safe",
         mode = "safe"
     cap = xi_result["captain"]
     xi = xi_result["xi"]
-    alts = xi[xi["id"] != cap["id"]].nlargest(3, "ep_next")
+    cap_id = int(cap["id"])
+    alts = xi[xi["id"] != cap_id].nlargest(3, "ep_next")
     margin = float(cap["ep_next"] - alts.iloc[0]["ep_next"]) if len(alts) else 99.0
 
     own = pd.to_numeric(players.set_index("id").get("selected_by_percent"),
                         errors="coerce")
-    cap_eo = float(own.get(int(cap["id"]), float("nan")))
+    cap_eo = float(own.get(cap_id, float("nan")))
 
     # best low-ownership option within the tolerance
-    diff_pool = xi[(xi["id"] != cap["id"])
+    diff_pool = xi[(xi["id"] != cap_id)
                    & (xi["id"].map(own).fillna(100) < DIFFERENTIAL_EO)
                    & (xi["ep_next"] >= cap["ep_next"] - CHASE_EP_TOLERANCE)]
     differential = None
     if len(diff_pool):
         d = diff_pool.nlargest(1, "ep_next").iloc[0]
-        differential = {"pick": d["web_name"],
+        differential = {"id": int(d["id"]), "pick": d["web_name"],
                         "ep_next": round(float(d["ep_next"]), 2),
                         "ownership": float(own.get(int(d["id"]), float("nan")))}
 
+    pick_id, vice_id = cap_id, int(xi_result["vice"]["id"])
     out = {
         "pick": cap["web_name"],
         "vice": xi_result["vice"]["web_name"],
@@ -161,17 +163,29 @@ def assess_captain(xi_result: dict, players: pd.DataFrame, mode: str = "safe",
     if mode == "chase" and differential is not None:
         out["safe_pick"] = cap["web_name"]
         out["pick"] = differential["pick"]
+        pick_id = differential["id"]
         out["reasoning"] = (f"[RECOMMENDATION] chase mode: {differential['pick']} "
                             f"({differential['ownership']:.0f}% owned) within "
                             f"{CHASE_EP_TOLERANCE} EP of {cap['web_name']} — the "
                             "differential armband buys rank variance")
+        # the armband moved, so the vice must move too: captain and vice can
+        # never be the same player. Highest-EP XI player who isn't the new
+        # captain — which is normally the EP-max pick we just stepped off.
+        if vice_id == pick_id:
+            rest = xi[xi["id"] != pick_id].nlargest(1, "ep_next")
+            if len(rest):
+                vice_id = int(rest.iloc[0]["id"])
+                out["vice"] = rest.iloc[0]["web_name"]
 
-    if sim is not None and len(sim):
-        s = sim.set_index("web_name")
-        for name_key in ("pick", "safe_pick"):
-            name = out.get(name_key)
-            if name and name in s.index:
-                r = s.loc[name]
+    if sim is not None and len(sim) and "id" in sim.columns:
+        # key by element id, never web_name: web_names are not unique in FPL
+        # (two Wards, two Reids), and a duplicate label makes .loc return a
+        # frame, which used to raise TypeError and abort the whole daily run
+        s = sim.drop_duplicates("id").set_index("id")
+        for key, pid in (("pick", pick_id), ("safe_pick", cap_id)):
+            name = out.get(key)
+            if name and pid in s.index:
+                r = s.loc[pid]
                 out.setdefault("simulation", {})[name] = {
                     "median": float(r["sim_p50"]), "p10": float(r["sim_p10"]),
                     "p90": float(r["sim_p90"]), "p_haul": float(r["p_haul"]),
@@ -194,20 +208,27 @@ def uncertainty_flags(ep: pd.DataFrame, chosen_ids: list[int],
                      "PPG is downweighted (process stats lead); treat close EP "
                      "comparisons as ties until real GWs accumulate")
 
-    risky = mine[(mine["price"] >= 7.0) & (mine["minutes"] < 900)]
-    for r in risky.itertuples():
-        if int(r.id) not in signal_ids:
-            flags.append(f"[MODEL] {r.web_name} (£{r.price}m) has <1 season of data and "
-                         "NO signal — research before trusting this pick")
+    # History checks read bootstrap `minutes`, which holds PRIOR-season totals
+    # only until GW1 is processed — afterwards it resets to the current season,
+    # where every player looks brand new (90 minutes, not 3,000). Running these
+    # past gws_played 0 flagged the entire squad as new signings, burying the
+    # genuine warnings. Post-GW1 the minutes-based tests are simply not
+    # answerable from this frame, so they don't run.
+    if gws_played == 0:
+        risky = mine[(mine["price"] >= 7.0) & (mine["minutes"] < 900)]
+        for r in risky.itertuples():
+            if int(r.id) not in signal_ids:
+                flags.append(f"[MODEL] {r.web_name} (£{r.price}m) has <1 season of data "
+                             "and NO signal — research before trusting this pick")
 
-    # new signings / promoted-team players at any price: no meaningful league
-    # sample, so their EP is a price prior wearing a number
-    fresh = mine[(mine["price"] < 7.0) & (mine["minutes"] < 450)]
-    for r in fresh.itertuples():
-        if int(r.id) not in signal_ids:
-            flags.append(f"[MODEL] {r.web_name} (£{r.price}m) has almost no league "
-                         "history (new signing / promoted) — EP is a price prior; "
-                         "a minutes signal would firm this up")
+        # new signings / promoted-team players at any price: no meaningful league
+        # sample, so their EP is a price prior wearing a number
+        fresh = mine[(mine["price"] < 7.0) & (mine["minutes"] < 450)]
+        for r in fresh.itertuples():
+            if int(r.id) not in signal_ids:
+                flags.append(f"[MODEL] {r.web_name} (£{r.price}m) has almost no league "
+                             "history (new signing / promoted) — EP is a price prior; "
+                             "a minutes signal would firm this up")
 
     thin = mine[mine["xmins"].between(0.45, 0.7)]
     for r in thin.itertuples():
@@ -312,34 +333,61 @@ def chip_advice(boot: dict, xi_result: dict | None, chips_available: list[str],
         return notes
 
     p_double, why = _future_double(scenarios, gw)
-    is_double_now = float(xi_result["captain"].get("next_n_fixtures", 1)) > 1
+
+    def _n_fx(row) -> float:
+        """Fixture count for a row, defaulting to 1 on missing/NaN."""
+        v = pd.to_numeric(pd.Series([row.get("next_n_fixtures", 1)]),
+                          errors="coerce").fillna(1.0).iloc[0]
+        return max(1.0, float(v))
+
+    cap_row = xi_result["captain"]
+    cap_n_fx = _n_fx(cap_row)
+    is_double_now = cap_n_fx > 1
 
     if "3xc" in chips_available:
-        cap_ep = float(xi_result["captain"]["ep_next"])
-        now_ev = cap_ep                          # TC adds +1x captain beyond 2x
-        hold_ev = cap_ep * DOUBLE_CAPTAIN_MULT * p_double
-        if is_double_now and now_ev >= hold_ev * CHIP_PLAY_MARGIN:
-            notes.append(f"[RECOMMENDATION] Triple Captain NOW: +{now_ev:.1f} EP on a "
-                         f"double, vs {hold_ev:.1f} holding. {why}")
-        else:
-            notes.append(f"[MODEL] Triple Captain: now +{now_ev:.1f} EP vs "
-                         f"~{hold_ev:.1f} holding for a double — "
-                         f"{'play' if now_ev >= hold_ev * CHIP_PLAY_MARGIN else 'hold'}. {why}")
+        # ep_next already SUMS this gameweek's fixtures, so on a double it is
+        # roughly twice a single-gameweek figure. Scaling it again by
+        # DOUBLE_CAPTAIN_MULT credited the double twice and made "play now"
+        # unreachable above p_double ~= 0.5; both sides must be in the same
+        # single-fixture units.
+        cap_ep = float(cap_row["ep_next"])              # this GW, all fixtures
+        cap_per_fx = cap_ep / cap_n_fx                  # single-fixture equivalent
+        now_ev = cap_ep                                 # TC adds +1x captain beyond 2x
+        hold_ev = cap_per_fx * DOUBLE_CAPTAIN_MULT * p_double
+        play = now_ev >= hold_ev * CHIP_PLAY_MARGIN
+        prefix = ("[RECOMMENDATION] Triple Captain NOW" if play and is_double_now
+                  else "[MODEL] Triple Captain")
+        notes.append(f"{prefix}: now +{now_ev:.1f} EP"
+                     f"{' on a double' if is_double_now else ''} vs ~{hold_ev:.1f} "
+                     f"holding for a future double — {'play' if play else 'hold'}. {why}")
 
     if "bboost" in chips_available and "bench_order" in xi_result:
-        bench_ep = float(xi_result["bench_order"]["ep_next"].sum())
-        now_ev = bench_ep
-        hold_ev = bench_ep * DOUBLE_BENCH_MULT * p_double
-        verdict = "play" if now_ev >= hold_ev * CHIP_PLAY_MARGIN else "hold"
+        bench = xi_result["bench_order"]
+        ep = pd.to_numeric(bench["ep_next"], errors="coerce").fillna(0.0)
+        # DataFrame.get with a default returns the SCALAR default, not a Series,
+        # so build the fallback explicitly rather than chaining off it
+        if "next_n_fixtures" in bench.columns:
+            n = pd.to_numeric(bench["next_n_fixtures"],
+                              errors="coerce").fillna(1.0).clip(lower=1)
+        else:
+            n = pd.Series(1.0, index=bench.index)
+        now_ev = float(ep.sum())
+        hold_ev = float((ep / n).sum()) * DOUBLE_BENCH_MULT * p_double
+        play = now_ev >= hold_ev * CHIP_PLAY_MARGIN
         notes.append(f"[MODEL] Bench Boost: now +{now_ev:.1f} EP vs ~{hold_ev:.1f} "
-                     f"holding for a double — {verdict}. {why}")
+                     f"holding for a future double — {'play' if play else 'hold'}. {why}")
 
-    for chip, label in (("freehit", "Free Hit"), ("wildcard1", "Wildcard"),
-                        ("wildcard2", "Wildcard 2")):
-        if chip in chips_available:
-            notes.append(f"[MODEL] {label}: structural chip — play on a blank/broken "
-                         "squad, not on EV; supply blank scenarios via signals for a number.")
-            break
+    # Structural chips each get their own note. An early `break` here meant the
+    # default chip set (which contains freehit) silently dropped ALL wildcard
+    # guidance — advice every pre-change run emitted.
+    if "wildcard1" in chips_available or "wildcard2" in chips_available:
+        which = "Wildcard 1" if "wildcard1" in chips_available else "Wildcard 2"
+        notes.append(f"[DATA] {which} available. [RECOMMENDATION] Structural chip — "
+                     "hold unless squad EP falls >15% below optimal (see the squad "
+                     "rating) or injuries have broken the squad.")
+    if "freehit" in chips_available:
+        notes.append("[MODEL] Free Hit: structural chip — play on a blank gameweek, "
+                     "not on EV; supply blank scenarios via signals for a number.")
     return notes
 
 

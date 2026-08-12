@@ -110,6 +110,55 @@ def test_unknown_mode_falls_back_to_safe():
     assert cap["pick"] == xi["captain"]["web_name"]
 
 
+def _tiny_xi(diff_is_vice: bool) -> tuple[pd.DataFrame, dict]:
+    xi = pd.DataFrame([
+        {"id": 1, "web_name": "Cap", "element_type": 3, "ep_next": 6.0, "ep_sd": 1.0},
+        {"id": 2, "web_name": "Diff", "element_type": 3, "ep_next": 5.7, "ep_sd": 1.0},
+        {"id": 3, "web_name": "Third", "element_type": 4, "ep_next": 4.0, "ep_sd": 1.0},
+    ])
+    vice = xi.iloc[1] if diff_is_vice else xi.iloc[2]
+    players = xi.assign(selected_by_percent=[50.0, 3.0, 40.0])
+    return players, {"xi": xi, "captain": xi.iloc[0], "vice": vice,
+                     "bench_order": pd.DataFrame([{"id": 9, "ep_next": 1.0}])}
+
+
+def test_chase_mode_never_makes_captain_and_vice_the_same_player():
+    """Regression: chase swapped the armband without moving the vice, so the
+    differential could be recommended as both — a team FPL will not accept."""
+    players, xi = _tiny_xi(diff_is_vice=True)
+    cap = policy.assess_captain(xi, players, mode="chase")
+    assert cap["pick"] == "Diff"
+    assert cap["vice"] != cap["pick"]
+    assert cap["vice"] == "Cap"          # the EP-max pick becomes the fallback
+
+
+def test_chase_mode_leaves_an_unrelated_vice_alone():
+    players, xi = _tiny_xi(diff_is_vice=False)
+    cap = policy.assess_captain(xi, players, mode="chase")
+    assert cap["pick"] == "Diff" and cap["vice"] == "Third"
+
+
+def test_duplicate_web_name_does_not_break_the_sim_merge():
+    """Regression: keying the simulation by web_name made .loc return a frame for
+    duplicated names (two Wards), raising TypeError and aborting the daily run."""
+    xi = pd.DataFrame([
+        {"id": 1, "web_name": "Ward", "element_type": 3, "ep_next": 6.0, "ep_sd": 1.0},
+        {"id": 2, "web_name": "Ward", "element_type": 2, "ep_next": 5.0, "ep_sd": 1.0},
+    ])
+    xi_result = {"xi": xi, "captain": xi.iloc[0], "vice": xi.iloc[1],
+                 "bench_order": pd.DataFrame()}
+    players = xi.assign(selected_by_percent=[50.0, 40.0])
+    sim = pd.DataFrame([
+        {"id": 1, "web_name": "Ward", "sim_p50": 5, "sim_p10": 1, "sim_p90": 12,
+         "p_haul": 0.2, "p_blank": 0.1},
+        {"id": 2, "web_name": "Ward", "sim_p50": 4, "sim_p10": 1, "sim_p90": 9,
+         "p_haul": 0.1, "p_blank": 0.2},
+    ])
+    cap = policy.assess_captain(xi_result, players, mode="safe", sim=sim)
+    # the CAPTAIN's row (id 1), not whichever duplicate label sorted first
+    assert cap["simulation"]["Ward"]["median"] == 5.0
+
+
 # -------------------------------------------------------------------- chips
 def _boot(gw: int = 10) -> dict:
     return {"events": [{"id": gw, "is_next": True, "is_current": False,
@@ -145,6 +194,40 @@ def test_no_scenarios_assumes_a_double_early_but_not_late():
     assert any("assuming a usable double" in n for n in early)
     assert any("season too late" in n for n in late)
     assert any("play" in n for n in late)       # nothing left to hold for
+
+
+def test_triple_captain_on_a_double_beats_the_default_prior():
+    """Regression: hold EV scaled the already-doubled ep_next by the double
+    multiplier again, so 'play now' was unreachable above p_double ~= 0.5 and a
+    live double always read as 'hold'."""
+    notes = policy.chip_advice(_boot(24), _xi(cap_ep=12.0, cap_fx=2), ["3xc"])
+    assert any("Triple Captain NOW" in n for n in notes)
+    # 12.0 banked now vs 1.7 x 6.0 x 0.8 = 8.2 from a future double
+    assert any("~8.2" in n for n in notes)
+
+
+def test_single_gameweek_still_holds_the_triple_captain():
+    notes = policy.chip_advice(_boot(10), _xi(cap_ep=6.0, cap_fx=1), ["3xc"])
+    assert any("hold" in n for n in notes)
+    assert not any("NOW" in n for n in notes)
+
+
+def test_wildcard_advice_survives_the_default_chip_set():
+    """Regression: the structural-chip loop broke after the first match, so the
+    default chip set (which contains freehit) dropped all wildcard guidance."""
+    notes = policy.chip_advice(_boot(10), _xi(6.0, 1),
+                               ["wildcard1", "wildcard2", "bboost", "3xc", "freehit"])
+    assert any("Wildcard 1" in n for n in notes)
+    assert any("Free Hit" in n for n in notes)
+    assert any("Triple Captain" in n for n in notes)
+    assert any("Bench Boost" in n for n in notes)
+
+
+def test_missing_fixture_count_does_not_claim_a_double():
+    xi = _xi(6.0, 1)
+    xi["captain"] = pd.Series({"web_name": "C", "ep_next": 6.0, "id": 1})  # no n_fx
+    notes = policy.chip_advice(_boot(24), xi, ["3xc"])
+    assert not any("on a double" in n for n in notes)
 
 
 # ------------------------------------------------------------ signal roles
@@ -188,6 +271,25 @@ adjustments:
     xmins_min: 0.95
 """)
     assert frame.loc[7, "xmins_min"] == pytest.approx(0.95)
+
+
+def test_role_contradicting_an_explicit_cap_rejects_the_file(tmp_path, monkeypatch):
+    """Regression: role expansion happened after validation, so a role floor
+    above an explicit cap was accepted and both bounds were silently dropped
+    instead of the file being rejected as AGENT.md promises."""
+    frame, notes = _load(tmp_path, monkeypatch, """
+date: 2026-08-19
+adjustments:
+  - player_id: 7
+    role: expected_starter
+    xmins_max: 0.45
+    ep_per_gw: 0.5
+""")
+    assert frame.empty                       # nothing applied, not even the nudge
+    assert not notes[0]["applied"]
+    problem = " ".join(notes[0]["problems"])
+    assert "contradictory bounds" in problem
+    assert "expected_starter" in problem     # names the role that caused it
 
 
 # ---------------------------------------------------------------- scenarios

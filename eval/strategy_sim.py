@@ -16,7 +16,8 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from fpl_agent import backtest, config, memoryio, optimizer, policy, replay, scoring  # noqa: E402
+from fpl_agent import backtest  # noqa: E402
+from season_loop import run_season  # noqa: E402
 
 OUT: list[str] = []
 
@@ -27,77 +28,17 @@ def log(s: str = "") -> None:
 
 
 def simulate(season: str, max_gw: int = 38, transfers: bool = True) -> dict:
-    """Run one season. transfers=False -> hold the GW1 squad all season.
+    """Run one season through the shared eval loop (eval/season_loop.py).
 
-    Scores every GW two ways: `raw` (XI + doubled captain, the historically
-    published number) and `autosub` (real matchday rules: automatic subs +
-    vice-captain fallback, via fpl_agent.scoring)."""
-    b = replay.build_at(season, 1)
-    squad_ids = list(b["squad"]["id"])
-    purchase = dict(zip(b["squad"]["id"], b["squad"]["price"]))
-    bank = round(config.BUDGET - b["cost"], 1)
-    fts, hits, moves = 1, 0, 0
-    total = 0.0
-    total_autosub = 0.0
-    n_subs, n_vice = 0, 0
-    weekly: list[float] = []
-
-    for gw in range(1, max_gw + 1):
-        ep = replay.expected_points_at(season, gw)
-        act = replay.actual_points(season, gw)
-        mine = ep[ep["id"].isin(squad_ids)]
-
-        if transfers and gw > 1 and len(mine) == config.SQUAD_SIZE:
-            # use the production rule, never a local copy of it
-            sell = memoryio.squad_selling_prices(
-                {"players": [{"id": pid, "purchase_price": purchase[pid]}
-                             for pid in squad_ids]},
-                ep)
-            try:
-                plan = optimizer.plan_transfers(ep, squad_ids, sell, bank=bank,
-                                                free_transfers=fts, max_transfers=2)
-                dec = policy.assess_transfers(plan, fts, gws_played=gw - 1)
-            except Exception:  # noqa: BLE001 — infeasible week: hold
-                dec = {"action": "hold", "plan": None}
-            if dec["action"] != "hold" and dec["plan"] is not None:
-                p = dec["plan"]
-                out_ids = list(p["out"]["id"])
-                in_rows = p["in"]
-                spend = float(in_rows["price"].sum())
-                recoup = sum(sell[i] for i in out_ids)
-                bank = round(bank + recoup - spend, 1)
-                for i in out_ids:
-                    squad_ids.remove(i)
-                    purchase.pop(i, None)
-                for r in in_rows.itertuples():
-                    squad_ids.append(int(r.id))
-                    purchase[int(r.id)] = float(r.price)
-                k = p["n_transfers"]
-                moves += k
-                hits += max(0, k - fts) * config.TRANSFER_HIT
-                fts = min(5, max(0, fts - k) + 1)
-            else:
-                fts = min(5, fts + 1)
-            mine = ep[ep["id"].isin(squad_ids)]
-
-        if len(mine) == config.SQUAD_SIZE:
-            xi = optimizer.pick_xi(mine)
-            mins = replay.actual_minutes(season, gw)
-            s = scoring.gw_score(xi, mins, act)
-            pts, pts_sub = s["raw"], s["autosub"]
-            n_subs += s["subs"]
-            n_vice += s["vice_used"]
-        else:
-            pts = pts_sub = 0.0
-        weekly.append(pts)
-        total += pts
-        total_autosub += pts_sub
-
-    return {"total": round(total - hits), "raw": round(total), "hits": hits,
-            "moves": moves, "weekly_mean": round(total / max_gw, 1),
-            "autosub_total": round(total_autosub - hits),
-            "autosub_gain": round(total_autosub - total),
-            "n_subs": n_subs, "n_vice": n_vice}
+    transfers=False -> hold the GW1 squad all season. Reports both the legacy
+    `raw` score (XI + doubled captain) and the autosub-aware total."""
+    r = run_season(season, max_gw=max_gw, transfers=transfers)
+    raw = sum(r["weekly_raw"])
+    return {"total": r["total_raw"], "raw": round(raw), "hits": r["hits"],
+            "moves": r["moves"], "weekly_mean": round(raw / max_gw, 1),
+            "autosub_total": r["total_autosub"],
+            "autosub_gain": round(sum(r["weekly_autosub"]) - raw),
+            "n_subs": r["n_subs"], "n_vice": r["n_vice"]}
 
 
 def main() -> None:

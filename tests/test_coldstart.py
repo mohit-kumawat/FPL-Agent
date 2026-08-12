@@ -39,18 +39,46 @@ def test_unknown_season_downweights_conservatively():
 def test_cross_regime_prior_shrinks_toward_process_stats():
     """With identical process stats, the ridge predicts one value for everyone;
     cross-regime weighting must pull outlier PPGs harder toward it."""
-    same = _prior_frame()
-    cross = same.assign(prior_rules_cross=True)
+    base = _prior_frame()
+    same = base.assign(prior_rules_cross=False)
+    cross = base.assign(prior_rules_cross=True)
 
     p_same = models.prior_baseline(same)
     p_cross = models.prior_baseline(cross)
 
-    hi = same["points_per_game"].idxmax()
-    lo = same["points_per_game"].idxmin()
+    hi = base["points_per_game"].idxmax()
+    lo = base["points_per_game"].idxmin()
     assert p_cross[hi] < p_same[hi]      # hot outcome trusted less
     assert p_cross[lo] > p_same[lo]      # cold outcome trusted less
-    # and the flag off means the original 0.5 weighting is untouched
-    assert p_same.equals(models.prior_baseline(same.assign(prior_rules_cross=False)))
+    # the explicit argument overrides the frame either way
+    assert p_cross.equals(models.prior_baseline(same, cross=True))
+    assert p_same.equals(models.prior_baseline(cross, cross=False))
+
+
+def test_regime_falls_back_to_config_when_frame_is_unmarked(monkeypatch):
+    """A frame built outside enrich_players/snapshot_at must not silently get
+    same-regime weighting — the season config decides instead."""
+    bare = _prior_frame()
+    assert "prior_rules_cross" not in bare.columns
+
+    monkeypatch.setattr(config, "PRIOR_SEASON", "2025-26")
+    monkeypatch.setattr(config, "CURRENT_SEASON", "2026-27")     # rules changed
+    assert models.cross_regime(bare) is True
+    assert models.prior_baseline(bare).equals(
+        models.prior_baseline(bare.assign(prior_rules_cross=True)))
+
+    monkeypatch.setattr(config, "PRIOR_SEASON", "2023-24")
+    monkeypatch.setattr(config, "CURRENT_SEASON", "2024-25")     # same generation
+    assert models.cross_regime(bare) is False
+
+
+def test_marked_frame_wins_over_config(monkeypatch):
+    """replay.snapshot_at marks historical frames explicitly; that must beat the
+    live-season config, or replaying an old season would use today's regime."""
+    monkeypatch.setattr(config, "PRIOR_SEASON", "2025-26")
+    monkeypatch.setattr(config, "CURRENT_SEASON", "2026-27")
+    marked = _prior_frame().assign(prior_rules_cross=False)
+    assert models.cross_regime(marked) is False
 
 
 def test_enrich_marks_prior_data_only_preseason(monkeypatch):
@@ -94,6 +122,23 @@ def test_cheap_new_signing_without_signal_is_flagged():
     assert any("NewSigning" in f and "price prior" in f for f in flags)
     assert any("Premium" in f for f in flags)
     assert not any("Nailed" in f for f in flags)
+
+
+def test_history_flags_do_not_fire_once_minutes_reset_after_gw1():
+    """Regression: bootstrap `minutes` holds prior-season totals only until GW1
+    is processed, then resets to the current season — so running the history
+    checks at gws_played 1-2 flagged every established player as a new signing."""
+    established = pd.DataFrame([
+        {"id": 1, "web_name": "EstablishedMid", "price": 6.0, "minutes": 90, "xmins": 0.95},
+        {"id": 2, "web_name": "EstablishedDef", "price": 5.0, "minutes": 85, "xmins": 0.95},
+        {"id": 3, "web_name": "Premium", "price": 12.0, "minutes": 90, "xmins": 0.95},
+    ])
+    for gws in (1, 2):
+        flags = policy.uncertainty_flags(established, [1, 2, 3], set(), gws_played=gws)
+        assert not any("new signing" in f or "<1 season of data" in f for f in flags), gws
+    # preseason, where minutes IS prior-season data, they still fire
+    preseason = policy.uncertainty_flags(established, [1, 2, 3], set(), gws_played=0)
+    assert any("new signing" in f for f in preseason)
 
 
 def test_signal_suppresses_the_cold_start_flag():

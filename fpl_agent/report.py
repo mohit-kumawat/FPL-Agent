@@ -155,11 +155,29 @@ def _render_md(ctx: dict) -> str:
             lines.append(f"  - Bench order: {_players_line(xi['bench_order'])}")
         if "captain" in rec:
             c = rec["captain"]
-            conf = "confident" if c["confident"] else f"thin margin ({c['margin']} EP)"
+            safe = c.get("safe_pick")
+            # `margin` and `confident` always describe the EP-max pick, so label
+            # them that way — in chase mode the recommended pick is a different
+            # player and attaching his name to that confidence would mislead.
+            conf = ("clear EP-max" if c["confident"]
+                    else f"thin EP-max margin ({c['margin']} EP)")
             eo = f", owned {c['ownership']:.0f}%" if c.get("ownership") is not None else ""
-            lines.append(f"- [RECOMMENDATION] Captain **{c['pick']}**, vice {c['vice']} — {conf}{eo}.")
-            if c.get("differential"):
-                dd = c["differential"]
+            lines.append(f"- [RECOMMENDATION] Captain **{c['pick']}**, "
+                         f"vice {c['vice']} — mode `{c.get('mode', 'safe')}`.")
+            if safe:
+                lines.append(f"  - **chase mode overrode the safe pick**: EP-max was "
+                             f"{safe} ({conf}{eo}); {c['pick']} is the differential.")
+                if c.get("reasoning"):
+                    lines.append(f"  - {c['reasoning']}")
+            else:
+                lines.append(f"  - EP-max pick: {conf}{eo}.")
+            for name, s in (c.get("simulation") or {}).items():
+                lines.append(f"  - [MODEL] {name} simulated: median {s['median']:.0f}, "
+                             f"p10-p90 {s['p10']:.0f}-{s['p90']:.0f}, "
+                             f"haul {s['p_haul']:.0%}, blank {s['p_blank']:.0%} "
+                             "(captain points double these)")
+            dd = c.get("differential")
+            if dd and dd["pick"] != c["pick"]:
                 lines.append(f"  - differential option: {dd['pick']} "
                              f"(EP {dd['ep_next']}, owned {dd['ownership']:.0f}%) — "
                              "for rank-chasing only")

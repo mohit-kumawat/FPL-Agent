@@ -28,7 +28,6 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from . import config
 from .models import CS_PTS, DC_THRESHOLD, GOAL_PTS
 
 SEED = 20260812
@@ -125,9 +124,22 @@ def simulate_players(ep: pd.DataFrame, n_trials: int = N_TRIALS,
     r = rng.random((P, n_trials))
     started = (r < p_start[:, None]) & has_fx
     benched = ~started & (r < (p_start + p_bench)[:, None]) & has_fx
-    p60_given_start = np.divide(p_60, p_start, out=np.zeros(P), where=p_start > 0).clip(0, 1)
-    sixty = started & (rng.random((P, n_trials)) < p60_given_start[:, None])
-    minutes = np.where(sixty, 90.0, np.where(started, 55.0, np.where(benched, 20.0, 0.0)))
+
+    # p_60 is UNCONDITIONAL P(reaches 60'). Dividing it by p_start alone capped
+    # simulated P(60) at p_start, so a long-substitute profile (start rate 0.30,
+    # xmins 0.65) could never reach 60' and lost roughly half its appearance and
+    # clean-sheet rate. Split the probability across both routes so the
+    # unconditional total is preserved: starters first, remainder from the bench.
+    p60_start = np.divide(p_60, p_start, out=np.zeros(P), where=p_start > 0).clip(0, 1)
+    spill = np.maximum(0.0, p_60 - p_start)
+    p60_bench = np.divide(spill, p_bench, out=np.zeros(P), where=p_bench > 0).clip(0, 1)
+    r60 = rng.random((P, n_trials))
+    sixty = ((started & (r60 < p60_start[:, None]))
+             | (benched & (r60 < p60_bench[:, None])))
+    minutes = np.where(sixty & started, 90.0,
+                       np.where(sixty & benched, 70.0,      # early sub, full hour
+                                np.where(started, 55.0,
+                                         np.where(benched, 20.0, 0.0))))
     exposure = (minutes / 90.0) * n_fx[:, None]           # blank -> 0, double -> 2x
 
     pts = np.zeros((P, n_trials))
