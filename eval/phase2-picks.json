@@ -1,0 +1,33 @@
+{
+ "season": "2023-24",
+ "recorded_before_scoring": true,
+ "anon_rule": "Captain heuristic on features only: prefer FWD/MID over DEF/GKP; distrust ep spikes on players under £7.0m as fixture-model artifacts; otherwise highest ep_next. No player identity available.",
+ "named_rule": "Same features, but names visible and season recall deliberately allowed. This arm is INTENDED to use memory — that is what is being measured.",
+ "anon": {
+  "1": "PEFA1E8",
+  "2": "PA2E550",
+  "3": "PBEF5BE",
+  "4": "P120BCC",
+  "5": "PC3FF2C",
+  "6": "P4E428F",
+  "7": "P890D8A",
+  "8": "P8BE211",
+  "9": "P1EFA75",
+  "10": "PF4C85F"
+ },
+ "named": {
+  "1": "Erling Haaland",
+  "2": "Erling Haaland",
+  "3": "Erling Haaland",
+  "4": "Erling Haaland",
+  "5": "Erling Haaland",
+  "6": "Kieran Trippier",
+  "7": "Erling Haaland",
+  "8": "Mohamed Salah",
+  "9": "Mohamed Salah",
+  "10": "Mohamed Salah"
+ },
+ "named_recall_used": {
+  "6": "Captained a Newcastle defender over the top-EP forward purely because I recall Newcastle won 8-0 in this gameweek. Nothing in the pre-deadline features justifies it — Trippier is third by ep_next and a defender. This is the single deliberate recall pick, isolated so its value can be measured."
+ }
+}

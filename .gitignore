@@ -26,6 +26,15 @@ memory/runs.jsonl
 memory/predictions/
 memory/research/
 
+# Scheduled-routine output: briefs, run logs, generated view
+memory/briefs/
+routine/logs/
+routine/view.html
+.routine.lock/
+
+# Forward-test ledger: hash-sealed copies of YOUR recommendations (your squad)
+eval/phase3-predictions.jsonl
+
 # Your research signals (may quote paywalled/personal sources)
 signals/*.yaml
 signals/*.yml

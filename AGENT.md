@@ -40,9 +40,8 @@ confidence: high         # high | medium | low — scales ep_per_gw 1.0 / 0.6 / 
 ttl_days: 14             # or `expires: 2026-08-22`; expired files are ignored
 notes: "Saka full training, expected to start GW1"
 adjustments:
-  - player_id: 12        # FPL element id (see reports or data/snapshots)
+  - player_id: 12        # FPL element id — see the lookup below
     xmins_min: 0.9       # floor on expected-minutes fraction ("nailed")
-    ep_per_gw: 0.4       # EP/GW nudge for quality/role news only
     reason: "confirmed starter, was priced as rotation risk"
   - player_id: 388       # a separate player who is NOT expected to start
     xmins_max: 0.45      # cap ("not in predicted XI", "rotation risk")
@@ -52,9 +51,26 @@ adjustments:
 Use `xmins_min` **or** `xmins_max` for a given player, never both — a floor above
 a cap is a contradiction and the whole file is rejected.
 
-Rule of thumb: minutes news → `xmins_min`/`xmins_max`; quality/role news that
-minutes can't express (pen duty gained, pushed forward) → `ep_per_gw` in [-2, 2].
-Player ids are FPL element ids — look them up in `data/snapshots/bootstrap_*.json`.
+**Write minutes facts, not opinions.** Your job in a signal is to tell the model
+*who is playing* — never *who is good*; the model owns quality. The blind-label
+test (eval/agent-backtest-report.md, Phase 2) measured agent quality-judgement at
+−6 captain points over ten GWs; its only positive contribution was information.
+`ep_per_gw` still exists for the rare quality/role fact minutes can't express
+(pen duty gained or lost, position change) but is a last resort: it needs a
+direct quote in `source`, stays within ±0.5 even though validation allows ±2,
+and "I think he's underrated" is never a signal. Not writing a signal is the
+normal outcome of research.
+Player ids are FPL element ids. The reports don't carry them, so look them up in
+the newest snapshot — with `jq`, never by reading the file, which is ~1.3MB on a
+single line:
+
+```
+jq -r '.elements[] | select(.web_name|test("Saka";"i")) | "\(.id) \(.web_name)"' \
+  data/snapshots/bootstrap_*.json
+```
+
+Never guess an id. A wrong one applies your adjustment to a different player and
+nothing will flag it.
 
 Add `confidence: high|medium|low` per file (default medium). It scales ep_per_gw
 by 1.0/0.6/0.3 — a manager quote is `high`; an aggregator's guess is `low`.
@@ -100,6 +116,14 @@ ceiling and consensus safety are legitimate tie-breakers for the owner to choose
   drive config changes) / OBSERVED FACTS / HYPOTHESES (never act on these).
   New lessons enter as hypotheses; promote only after eval-suite evidence.
 - `memory/predictions/` — auto-saved; scored automatically after each GW.
+
+## Reference material
+
+`docs/background-research.md` is provenance, not spec — the literature review
+that seeded the project. It describes an FDR table and PPG-based expected points
+that the code no longer uses. Read it for the citations if a question is about
+where an idea came from; never treat it as a description of the current system.
+For that, read `README.md` or the code.
 
 ## Hard rules
 
