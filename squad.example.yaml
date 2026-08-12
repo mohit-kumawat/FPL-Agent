@@ -12,7 +12,13 @@ player_id: null           # optional: your FPL account player id (not the entry 
 season: "2026-27"
 bank: 100.0               # £m unspent (100.0 when no squad exists yet)
 free_transfers: 0         # 0-5; they bank up to 5
-chips_available: [wildcard1, wildcard2, bboost, 3xc, freehit]
+# 2026/27 gives TWO full sets of chips — one per half of the season. Suffix 1 is
+# the first-half copy (Wildcard/Free Hit GW2-19, Bench Boost/Triple Captain
+# GW1-19), suffix 2 the second-half copy (GW20-38). Only ONE chip may be played
+# in a gameweek. Remove each name as you use it. An unsuffixed name (`bboost`)
+# still works and means "a copy is unused".
+chips_available: [wildcard1, freehit1, bboost1, 3xc1,
+                  wildcard2, freehit2, bboost2, 3xc2]
 strategy_mode: safe       # safe (EP-max, default) | balanced | chase (differential
                           # captain allowed within 1.0 EP; safe pick stays visible)
 

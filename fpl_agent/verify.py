@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
-from . import config, data
+from . import config, data, models, rules
 
 
 def verify_state(boot: dict, squad: dict, fixtures: list[dict],
@@ -48,6 +48,22 @@ def verify_state(boot: dict, squad: dict, fixtures: list[dict],
             blockers.append("next-GW deadline is in the past — events data stale")
         else:
             checks.append(f"deadline sane: GW{nxt['id']} at {nxt['deadline_time']}")
+
+    # ---- 1b. is the game still scored the way the model thinks? ---------
+    # bootstrap publishes the live scoring table; if FPL tweaks a value
+    # mid-season, every projection silently drifts. Warn, never block.
+    drift = rules.check_scoring(boot, models.GOAL_PTS, models.CS_PTS, models.DC_POINTS)
+    for d in drift:
+        warnings.append(f"SCORING RULE DRIFT — {d} (update fpl_agent/models.py; "
+                        "projections are wrong until you do)")
+    if not drift and rules.live_scoring(boot):
+        checks.append("scoring table matches the model (goals, CS, DC, cards, "
+                      "appearance, saves, penalties)")
+    chip_w = rules.chip_windows(boot)
+    if chip_w:
+        checks.append("chip windows from API: " + "; ".join(
+            f"{rules.CHIP_LABELS[f]} " + ",".join(f"GW{a}-{b}" for a, b in w)
+            for f, w in chip_w.items() if f in rules.CHIP_LABELS))
     if not fixtures:
         warnings.append("fixtures list empty")
     strengths = [t.get(k, 0) for t in boot.get("teams", [])
@@ -100,10 +116,11 @@ def verify_state(boot: dict, squad: dict, fixtures: list[dict],
         bank = float(squad.get("bank", 0.0))
         if bank < 0:
             blockers.append(f"negative bank {bank}")
-        chips = set(squad.get("chips_available", []))
-        valid_chips = {"wildcard1", "wildcard2", "bboost", "3xc", "freehit"}
-        if chips - valid_chips:
-            warnings.append(f"unknown chips in squad.yaml: {chips - valid_chips}")
+        chips = {str(c).strip().lower() for c in (squad.get("chips_available") or [])}
+        unknown = chips - rules.valid_chip_names()
+        if unknown:
+            warnings.append(f"unknown chips in squad.yaml: {sorted(unknown)} — valid: "
+                            f"{sorted(rules.valid_chip_names())}")
 
     # ---- 3. reconcile vs official account data (once entry exists) -----
     entry_id = squad.get("entry_id")

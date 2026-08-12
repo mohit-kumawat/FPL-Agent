@@ -218,7 +218,13 @@ def model_b_ridge_inseason(panel: pd.DataFrame) -> pd.Series:
 # ------------------------------------------------------ component model
 GOAL_PTS = {1: 10, 2: 6, 3: 5, 4: 4}     # 2025/26+ scoring (GK goal = 10)
 CS_PTS = {1: 4, 2: 4, 3: 1, 4: 0}
-DC_THRESHOLD = {1: 12, 2: 10, 3: 12, 4: 12}   # defensive contribution (2025/26+)
+# Defensive contribution (2025/26+): 2 points, capped, at 10 CBIT for defenders
+# and 12 including recoveries for midfielders and forwards. GOALKEEPERS EARN
+# NOTHING HERE — game_config.scoring.defensive_contribution is 0 for GKP, and
+# awarding them 2 inflated every keeper's EP. rules.check_scoring watches for
+# drift in these values on every run.
+DC_POINTS = {1: 0.0, 2: 2.0, 3: 2.0, 4: 2.0}
+DC_THRESHOLD = {1: 12, 2: 10, 3: 12, 4: 12}
 
 
 def component_frame(df: pd.DataFrame) -> pd.DataFrame:
@@ -246,7 +252,8 @@ def component_frame(df: pd.DataFrame) -> pd.DataFrame:
     gc90 = -(xgc90 / 2.0).where(df["element_type"].isin([1, 2]), 0.0)
 
     dc90 = p90("defensive_contribution")
-    dc_pts90 = 2.0 * (dc90 / df["element_type"].map(DC_THRESHOLD)).clip(0, 1) * 0.85
+    dc_pts90 = (df["element_type"].map(DC_POINTS)
+                * (dc90 / df["element_type"].map(DC_THRESHOLD)).clip(0, 1) * 0.85)
 
     neutral90 = p90("bonus") + p90("saves") / 3.0 + dc_pts90 + gc90
     return pd.DataFrame({"attack90": attack90, "cs90": cs90, "neutral90": neutral90})

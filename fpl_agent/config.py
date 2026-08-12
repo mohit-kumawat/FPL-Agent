@@ -53,6 +53,13 @@ USER_AGENT = "Mozilla/5.0 (fpl-agent personal research)"
 PRICE_CHANGE_TZ = "Europe/London"
 PRICE_CHANGE_LOCAL_HOUR = 0
 PRICE_CHANGE_LOCAL_MINUTE = 0
+
+# Gameweek lockdown. For 2026/27 FPL moved this from ~1h after the final whistle
+# to 09:00 UK local on the day AFTER the gameweek's last match, so that late BPS
+# and defensive-contribution corrections land before scores are final
+# (premierleague.com/en/news/4679873). Calibration must not score predictions
+# against provisional points: a bonus revision would be recorded as model error.
+GW_LOCKDOWN_LOCAL_HOUR = 9
 PRICE_CHANGE_GRACE_MINUTES = 20  # the API takes a few minutes to settle
 MAX_SNAPSHOT_AGE_HOURS = 12      # refetch anything older, even same-day
 DEADLINE_FRESH_HOURS = 3         # within 24h of a deadline, demand this freshness

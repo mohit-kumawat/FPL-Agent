@@ -28,7 +28,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .models import CS_PTS, DC_THRESHOLD, GOAL_PTS
+from .models import CS_PTS, DC_POINTS, DC_THRESHOLD, GOAL_PTS
 
 SEED = 20260812
 N_TRIALS = 2000
@@ -82,6 +82,7 @@ def simulate_players(ep: pd.DataFrame, n_trials: int = N_TRIALS,
     bonus90 = _p90(ep, "bonus")
     dc90 = _p90(ep, "defensive_contribution")
     dc_thr = np.array([DC_THRESHOLD[t] for t in et], dtype=float)
+    dc_pts = np.array([DC_POINTS[t] for t in et], dtype=float)   # 0 for GKP
     p_dc = np.clip(dc90 / dc_thr, 0, 1) * 0.85
 
     goal_pts = np.array([GOAL_PTS[t] for t in et], dtype=float)
@@ -105,7 +106,7 @@ def simulate_players(ep: pd.DataFrame, n_trials: int = N_TRIALS,
     e_cs = p_60 * np.exp(-xgc90 * n_fx / per_fx_def) * cs_pts
     e_gc = -np.where(is_gk_def, xgc90 * xmins * n_fx / per_fx_def / 2.0, 0.0)
     e_saves = np.where(is_gk, saves90 * xmins * n_fx / 3.0, 0.0)
-    e_dc = 2.0 * n_fx * p_dc * xmins
+    e_dc = dc_pts * n_fx * p_dc * xmins
     e_bonus = np.clip(bonus90, 0, 3) * xmins * n_fx
     e_scalable = e_goals + e_assists + e_saves + e_dc + e_bonus
     e_fixed = e_app + e_cs + e_gc
@@ -156,8 +157,9 @@ def simulate_players(ep: pd.DataFrame, n_trials: int = N_TRIALS,
     pts -= np.where(is_gk_def[:, None], conceded // 2, 0)
     pts += np.where(is_gk[:, None],
                     rng.poisson(saves90[:, None] * exposure) // 3, 0)
-    pts += 2.0 * rng.binomial(n_fx[:, None].astype(int),
-                              np.clip(p_dc[:, None] * (minutes / 90.0), 0, 1))
+    pts += dc_pts[:, None] * rng.binomial(
+        n_fx[:, None].astype(int),
+        np.clip(p_dc[:, None] * (minutes / 90.0), 0, 1))
 
     # ---- bonus + small point sources ---------------------------------------
     pts += np.minimum(rng.poisson(np.clip(bonus90[:, None], 0, 3) * exposure),

@@ -72,6 +72,14 @@ Triple Captain / Bench Boost play-now-vs-hold EV *given* your double/blank
 probabilities — it never invents them. No scenarios means a conservative
 default prior early season and no assumed double after GW30.
 
+**Chips in 2026/27:** there are TWO full sets — Wildcard, Free Hit, Bench Boost
+and Triple Captain in each half. Bench Boost and Triple Captain are playable from
+GW1; Wildcard and Free Hit open at GW2. Only ONE chip may be played per
+gameweek, and an unused first-half copy expires at the split (it does not carry
+over). Windows are read from the API, so the report states which copy is live.
+Keep `chips_available` in `squad.yaml` accurate — remove each name as it is used,
+or the advice will offer a chip you no longer hold.
+
 **Write minutes facts, not opinions.** Your job in a signal is to tell the model
 *who is playing* — never *who is good*; the model owns quality. The blind-label
 test (eval/agent-backtest-report.md, Phase 2) measured agent quality-judgement at

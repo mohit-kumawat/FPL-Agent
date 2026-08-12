@@ -177,7 +177,7 @@ def test_triple_captain_on_a_double_beats_a_thin_future():
     scen = [{"gw": 29, "kind": "double", "prob": 0.3}]
     notes = policy.chip_advice(_boot(24), _xi(cap_ep=12.0, cap_fx=2),
                                ["3xc"], scenarios=scen)
-    assert any("Triple Captain NOW" in n for n in notes)
+    assert any("Triple Captain" in n and "NOW" in n for n in notes)
 
 
 def test_triple_captain_holds_for_a_likely_double():
@@ -201,7 +201,7 @@ def test_triple_captain_on_a_double_beats_the_default_prior():
     multiplier again, so 'play now' was unreachable above p_double ~= 0.5 and a
     live double always read as 'hold'."""
     notes = policy.chip_advice(_boot(24), _xi(cap_ep=12.0, cap_fx=2), ["3xc"])
-    assert any("Triple Captain NOW" in n for n in notes)
+    assert any("Triple Captain" in n and "NOW" in n for n in notes)
     # 12.0 banked now vs 1.7 x 6.0 x 0.8 = 8.2 from a future double
     assert any("~8.2" in n for n in notes)
 

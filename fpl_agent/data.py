@@ -103,6 +103,55 @@ def last_price_change(now: datetime | None = None) -> datetime:
     return boundary.astimezone(timezone.utc)
 
 
+def last_kickoff(fixtures: list[dict] | None, gw: int) -> datetime | None:
+    """Latest kickoff in a gameweek, UTC — the clock lockdown is measured from."""
+    times = []
+    for f in (fixtures or []):
+        if f.get("event") != gw or not f.get("kickoff_time"):
+            continue
+        try:
+            times.append(datetime.fromisoformat(
+                str(f["kickoff_time"]).replace("Z", "+00:00")))
+        except ValueError:
+            continue
+    return max(times) if times else None
+
+
+def gw_points_final(event: dict | None, fixtures: list[dict] | None = None,
+                    now: datetime | None = None) -> tuple[bool, str]:
+    """Are a finished gameweek's points final? (final, reason)
+
+    For 2026/27 lockdown moved to 09:00 UK local on the day AFTER the gameweek's
+    last match, so bonus and defensive-contribution corrections can still land
+    after `finished` flips. Scoring predictions before that banks FPL's own
+    revisions as model error.
+
+    `data_checked` is FPL's explicit "this is final" flag and wins when present.
+    Otherwise the lockdown clock is measured from the last KICKOFF (a gameweek
+    can end on a Monday night, so the deadline is not a safe proxy); with no
+    fixture data we decline to call it final rather than guess early.
+    """
+    if not event:
+        return False, "no event"
+    if not event.get("finished"):
+        return False, "gameweek not finished"
+    if event.get("data_checked"):
+        return True, "FPL marked the gameweek data_checked"
+
+    ko = last_kickoff(fixtures, int(event.get("id", 0)))
+    if ko is None:
+        return False, ("no kickoff times for this gameweek — waiting for FPL's "
+                       "data_checked flag rather than assuming points are final")
+    tz = ZoneInfo(config.PRICE_CHANGE_TZ)
+    local = (now or datetime.now(timezone.utc)).astimezone(tz)
+    lockdown = (ko.astimezone(tz) + timedelta(days=1)).replace(
+        hour=config.GW_LOCKDOWN_LOCAL_HOUR, minute=0, second=0, microsecond=0)
+    if local >= lockdown:
+        return True, f"past the {config.GW_LOCKDOWN_LOCAL_HOUR:02d}:00 UK lockdown"
+    return False, (f"before the {config.GW_LOCKDOWN_LOCAL_HOUR:02d}:00 UK lockdown "
+                   f"({lockdown:%Y-%m-%d %H:%M} local) — bonus/DC may still change")
+
+
 def is_stale(name: str, now: datetime | None = None,
              hours_to_deadline: float | None = None) -> tuple[bool, str]:
     """Is the cached snapshot too old to trust for prices? (stale, reason).

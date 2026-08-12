@@ -35,7 +35,7 @@ and produces recommendations for a human to act on.
 |---|---|
 | Docs | This file (full reference) · [AGENT.md](AGENT.md) (agent runbook) · [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Evidence | [eval/2024-25-report.md](eval/2024-25-report.md) · [eval/strategy-sim-report.md](eval/strategy-sim-report.md) · [eval/ablation-report.md](eval/ablation-report.md) |
-| Tests | `uv run pytest -q` (106 offline tests) · `uv run python eval/run_backtests.py` (replay suite) |
+| Tests | `uv run pytest -q` (129 offline tests) · `uv run python eval/run_backtests.py` (replay suite) |
 | Licence | MIT |
 
 *The rest of this file is the complete technical reference: exactly what the code
@@ -448,7 +448,7 @@ uv run fpl rate                   # grade squad.yaml against optimal
 uv run fpl pending [list|add <text>|done <substr>]
 uv run fpl backtest               # model A/B/ensemble, out-of-sample
 uv run fpl refresh                # force re-fetch
-uv run pytest -q                  # 106 offline tests, no network
+uv run pytest -q                  # 129 offline tests, no network
 uv run python eval/run_backtests.py    # point-in-time replay suite
 uv run python eval/strategy_sim.py     # full-season strategy return
 uv run python eval/ablation.py         # ablation ladder + bootstrap CIs
@@ -556,6 +556,11 @@ underperforms.
   mean ignores them entirely.
 - **xG and xA are mapped to FPL goals and assists directly**, though FPL's
   assist definition is broader than standard xA.
+- **Chip availability is read from the API, but chip *strategy* is not solved.**
+  Windows come from `bootstrap.chips` (2026/27: two full sets, Wildcard and Free
+  Hit GW2–19 and GW20–38, Bench Boost and Triple Captain GW1–19 and GW20–38, one
+  chip per gameweek), and the code respects that a first-half copy expires at the
+  split. What it does not do is plan a season-long chip route across both halves.
 - **Chip EV covers Triple Captain and Bench Boost only**, computed *given*
   double/blank scenarios the agent supplies from research (plus a decaying
   default prior). Free Hit and Wildcard remain structural advice; nothing
@@ -633,3 +638,17 @@ All constants live in `config.py` with the evidence for their value beside them.
 | `CHASE_EP_TOLERANCE` | 1.0 EP | Max EP a differential armband may cost in chase mode |
 | `CHIP_PLAY_MARGIN` | 1.15 | Chips are one-shot options; ties go to holding |
 | `DEFAULT_DOUBLE_PROB` / `_LAST_GW` | 0.8 / GW30 | Unresearched-double prior; silence after GW30 means none |
+| `DC_POINTS` | GKP 0, others 2 | `game_config.scoring.defensive_contribution` — keepers earn none |
+| `DC_THRESHOLD` | DEF 10, MID/FWD 12 | CBIT for defenders, CBIRT (incl. recoveries) for the rest |
+| `GW_LOCKDOWN_LOCAL_HOUR` | 09:00 UK | 2026/27 lockdown moved to the morning after the last match; calibration waits for it |
+
+### 13.1 Where the rules come from
+
+The scoring table and chip windows are published by the API in
+`bootstrap.game_config.scoring` and `bootstrap.chips`. `fpl_agent/rules.py` reads
+the chip windows live (they change shape between seasons) and, on every run,
+compares the model's scoring constants against the live table — any mismatch
+becomes a loud verification warning rather than a quietly wrong projection. The
+constants themselves stay static because a replay of 2023/24 must be scored under
+2023/24's rules. `RULES_VERSION` records which rule generation each season
+belongs to; 2026/27 is generation 3 (BPS rework).

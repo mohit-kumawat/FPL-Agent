@@ -168,17 +168,25 @@ def run_daily(force: bool = False) -> dict:
         if gw_next:
             memoryio.save_predictions(gw_next, ep)
 
-        # calibration when a GW just finished
+        # calibration when a GW just finished — but only once its points are
+        # FINAL. 2026/27 lockdown is 09:00 UK the day after the last match, so
+        # scoring earlier would bank FPL's own bonus/DC revisions as model error.
         if work["full_retrain"] and not panel.empty:
             last_gw = int(panel["round"].max())
-            score = memoryio.score_predictions(
-                last_gw, panel[panel["round"] == last_gw]
-            )
-            if score:
-                ctx["findings"].append(
-                    f"[MODEL] GW{last_gw} calibration: MAE {score['mae_all']} "
-                    f"(top-50: {score['mae_top50']})"
+            ev = next((e for e in boot["events"] if e["id"] == last_gw), None)
+            final, why = data.gw_points_final(ev, fixtures)
+            if final:
+                score = memoryio.score_predictions(
+                    last_gw, panel[panel["round"] == last_gw]
                 )
+                if score:
+                    ctx["findings"].append(
+                        f"[MODEL] GW{last_gw} calibration: MAE {score['mae_all']} "
+                        f"(top-50: {score['mae_top50']})"
+                    )
+            else:
+                ctx["findings"].append(
+                    f"[DATA] GW{last_gw} calibration deferred — {why}")
 
         squad_ids = [p["id"] for p in (squad.get("players") or [])]
         gws_played = int(ep["gws_played"].iloc[0]) if len(ep) else 0

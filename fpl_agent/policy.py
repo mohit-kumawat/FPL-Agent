@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from . import config
+from . import config, rules
 
 # base thresholds over the HORIZON_GWS window (dynamic scaling below)
 FT_GAIN_MIN = 2.0        # use a free transfer only if it adds >= this EP
@@ -315,7 +315,14 @@ def chip_advice(boot: dict, xi_result: dict | None, chips_available: list[str],
                 scenarios: list[dict] | None = None) -> list[str]:
     """Chip expected value: play now vs the modelled value of holding.
 
-    Advisory by design — a chip fires once a season, so the bar for "now" is
+    Chip availability comes from the API (`rules.chip_windows`), not from
+    assumptions: 2026/27 ships TWO full sets — Wildcard, Free Hit, Bench Boost
+    and Triple Captain in each half — with Bench Boost and Triple Captain
+    playable from GW1 while Wildcard and Free Hit open at GW2. Only ONE chip may
+    be played per gameweek, so when several clear their bar the best is
+    recommended and the rest are named as blocked.
+
+    Advisory by design: a chip copy fires once per half, so the bar for "now" is
     now >= hold x CHIP_PLAY_MARGIN, and every number states its assumptions.
     """
     notes: list[str] = []
@@ -323,13 +330,28 @@ def chip_advice(boot: dict, xi_result: dict | None, chips_available: list[str],
     if nxt is None:
         return notes
     gw = int(nxt["id"])
-    if gw <= 1:
-        notes.append("[DATA] No chips playable before GW1; initial squad IS the wildcard.")
+    windows = rules.chip_windows(boot)
+    playable = rules.playable_now(chips_available, gw, windows)
+
+    def label(family: str) -> str:
+        half = rules.chip_half(family, gw, windows)
+        base = rules.CHIP_LABELS[family]
+        return f"{base} {half}" if half else base
+
+    if not playable:
+        held = rules.canonical_chips(chips_available)
+        if held:
+            notes.append(f"[DATA] No chip is playable in GW{gw} "
+                         f"(held: {', '.join(sorted(held))}).")
+        elif gw <= 1:
+            notes.append("[DATA] No chips left; the initial squad IS the wildcard.")
         return notes
+
     if xi_result is None:
-        if "wildcard1" in chips_available:
-            notes.append("[DATA] Wildcard 1 window is open. [RECOMMENDATION] Hold "
-                         "unless squad EP falls >15% below optimal.")
+        # no XI context (preseason build): windows only, no EV
+        for family in playable:
+            notes.append(f"[DATA] {label(family)} is available in GW{gw}. "
+                         "[RECOMMENDATION] Hold — chip EV needs a settled squad.")
         return notes
 
     p_double, why = _future_double(scenarios, gw)
@@ -343,8 +365,10 @@ def chip_advice(boot: dict, xi_result: dict | None, chips_available: list[str],
     cap_row = xi_result["captain"]
     cap_n_fx = _n_fx(cap_row)
     is_double_now = cap_n_fx > 1
+    # (family, now_ev, hold_ev) for chips whose value is this week's points
+    scored: list[tuple[str, float, float]] = []
 
-    if "3xc" in chips_available:
+    if "3xc" in playable:
         # ep_next already SUMS this gameweek's fixtures, so on a double it is
         # roughly twice a single-gameweek figure. Scaling it again by
         # DOUBLE_CAPTAIN_MULT credited the double twice and made "play now"
@@ -352,16 +376,10 @@ def chip_advice(boot: dict, xi_result: dict | None, chips_available: list[str],
         # single-fixture units.
         cap_ep = float(cap_row["ep_next"])              # this GW, all fixtures
         cap_per_fx = cap_ep / cap_n_fx                  # single-fixture equivalent
-        now_ev = cap_ep                                 # TC adds +1x captain beyond 2x
-        hold_ev = cap_per_fx * DOUBLE_CAPTAIN_MULT * p_double
-        play = now_ev >= hold_ev * CHIP_PLAY_MARGIN
-        prefix = ("[RECOMMENDATION] Triple Captain NOW" if play and is_double_now
-                  else "[MODEL] Triple Captain")
-        notes.append(f"{prefix}: now +{now_ev:.1f} EP"
-                     f"{' on a double' if is_double_now else ''} vs ~{hold_ev:.1f} "
-                     f"holding for a future double — {'play' if play else 'hold'}. {why}")
+        scored.append(("3xc", cap_ep,                   # TC adds +1x beyond 2x
+                       cap_per_fx * DOUBLE_CAPTAIN_MULT * p_double))
 
-    if "bboost" in chips_available and "bench_order" in xi_result:
+    if "bboost" in playable and "bench_order" in xi_result:
         bench = xi_result["bench_order"]
         ep = pd.to_numeric(bench["ep_next"], errors="coerce").fillna(0.0)
         # DataFrame.get with a default returns the SCALAR default, not a Series,
@@ -371,23 +389,40 @@ def chip_advice(boot: dict, xi_result: dict | None, chips_available: list[str],
                               errors="coerce").fillna(1.0).clip(lower=1)
         else:
             n = pd.Series(1.0, index=bench.index)
-        now_ev = float(ep.sum())
-        hold_ev = float((ep / n).sum()) * DOUBLE_BENCH_MULT * p_double
-        play = now_ev >= hold_ev * CHIP_PLAY_MARGIN
-        notes.append(f"[MODEL] Bench Boost: now +{now_ev:.1f} EP vs ~{hold_ev:.1f} "
-                     f"holding for a future double — {'play' if play else 'hold'}. {why}")
+        scored.append(("bboost", float(ep.sum()),
+                       float((ep / n).sum()) * DOUBLE_BENCH_MULT * p_double))
 
-    # Structural chips each get their own note. An early `break` here meant the
-    # default chip set (which contains freehit) silently dropped ALL wildcard
-    # guidance — advice every pre-change run emitted.
-    if "wildcard1" in chips_available or "wildcard2" in chips_available:
-        which = "Wildcard 1" if "wildcard1" in chips_available else "Wildcard 2"
-        notes.append(f"[DATA] {which} available. [RECOMMENDATION] Structural chip — "
-                     "hold unless squad EP falls >15% below optimal (see the squad "
-                     "rating) or injuries have broken the squad.")
-    if "freehit" in chips_available:
-        notes.append("[MODEL] Free Hit: structural chip — play on a blank gameweek, "
-                     "not on EV; supply blank scenarios via signals for a number.")
+    # A chip is worth playing only if it beats holding AND actually banks
+    # something — with zero EP on both sides (a blank, or missing fixture data)
+    # `now >= hold` is trivially true and used to read as "play".
+    def clears(now_ev: float, hold_ev: float) -> bool:
+        return now_ev > 0.05 and now_ev >= hold_ev * CHIP_PLAY_MARGIN
+
+    winner = max((s for s in scored if clears(s[1], s[2])),
+                 key=lambda s: s[1] - s[2], default=None)
+    for family, now_ev, hold_ev in scored:
+        verdict = "play" if clears(now_ev, hold_ev) else "hold"
+        if winner is not None and family == winner[0]:
+            prefix = f"[RECOMMENDATION] {label(family)} NOW"
+        else:
+            prefix = f"[MODEL] {label(family)}"
+        blocked = ("" if winner is None or family == winner[0] or verdict == "hold"
+                   else f" — blocked this GW: only one chip per gameweek, and "
+                        f"{rules.CHIP_LABELS[winner[0]]} is worth more")
+        notes.append(f"{prefix}: now +{now_ev:.1f} EP"
+                     f"{' on a double' if family == '3xc' and is_double_now else ''} "
+                     f"vs ~{hold_ev:.1f} holding for a future double — "
+                     f"{verdict}{blocked}. {why}")
+
+    if "wildcard" in playable:
+        notes.append(f"[DATA] {label('wildcard')} available. [RECOMMENDATION] "
+                     "Structural chip — hold unless squad EP falls >15% below "
+                     "optimal (see the squad rating) or injuries have broken the squad.")
+    if "freehit" in playable:
+        notes.append(f"[MODEL] {label('freehit')}: structural chip — play on a blank "
+                     "gameweek, not on EV; supply blank scenarios via signals for a number.")
+    if winner is not None and len(scored) > 1:
+        notes.append("[DATA] Only one chip may be played per gameweek.")
     return notes
 
 
