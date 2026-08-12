@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 import pandas as pd
 import pytest
 
-from fpl_agent import data, models, policy, rules, simulate
+from fpl_agent import data, memoryio, models, policy, rules, simulate
 
 # The live 2026/27 table, copied from game_config.scoring.
 LIVE_SCORING = {
@@ -311,3 +311,40 @@ def test_pending_calibration_triggers_a_retrain():
                                  has_signals=False, pending_gws=[5])
     assert work["models"] and work["full_retrain"]
     assert any("points now final" in t for t in work["triggers"])
+
+
+# ------------------------------------------------- the agent's own contract
+def test_example_squad_chip_names_are_all_valid():
+    """squad.example.yaml is what an owner copies; every chip name in it must
+    pass the validator, or a fresh install starts with a verify warning."""
+    import pathlib
+
+    import yaml
+    doc = yaml.safe_load(
+        (pathlib.Path(__file__).resolve().parent.parent / "squad.example.yaml").read_text())
+    chips = {str(c).strip().lower() for c in (doc.get("chips_available") or [])}
+    assert chips, "example squad lists no chips"
+    assert chips <= rules.valid_chip_names(), chips - rules.valid_chip_names()
+    # both halves of every family should be present in a fresh season
+    for family in rules.CHIP_FAMILIES:
+        assert f"{family}1" in chips and f"{family}2" in chips, family
+
+
+def test_agent_runbook_documents_the_rules_it_must_operate_under():
+    """AGENT.md is the agent's system prompt. If these facts fall out of it the
+    agent silently loses them, so the important ones are pinned here."""
+    import pathlib
+    doc = (pathlib.Path(__file__).resolve().parent.parent / "AGENT.md").read_text()
+    for needle in (
+        "09:00 UK",                      # lockdown timing
+        "calibration deferred",          # expected, not a fault
+        "BPS was reworked",              # stale prior-season bonus patterns
+        "SCORING RULE DRIFT",            # stop-and-escalate signal
+        "2 January",                     # first-half chip expiry
+        "No extra December transfers",   # no AFCON allocation
+        "saves-per-point",               # named as un-auto-checkable
+    ):
+        assert needle in doc, f"AGENT.md no longer documents: {needle}"
+    # the role vocabulary the agent is told to prefer must actually exist
+    for role in memoryio.SIGNAL_ROLES:
+        assert role in doc, f"AGENT.md omits signal role: {role}"

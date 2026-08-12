@@ -18,12 +18,19 @@ only when the report shows clear net EP gain, and say what the gain is.
    conferences this run exists to catch.
 2. Research only what the report's **Monitor next** flags. Minutes facts are
    the valuable output: injuries, suspensions, predicted lineups, press
-   conferences. Write findings as minutes signals (`xmins_min`/`xmins_max`,
-   with a source line), then `uv run fpl daily --force` once. Not writing a
+   conferences. Write findings as minutes signals — prefer the `role:`
+   vocabulary (`expected_starter`, `rotation_risk`, `managed_minutes`,
+   `bench_role`, `not_in_predicted_xi`, `ruled_out`) over raw bounds, always
+   with a source line — then `uv run fpl daily --force` once. Not writing a
    signal is the normal outcome of research.
 3. In a teamnews-window run, check leaked/confirmed lineups against the
    current XI and captain falsifiers from the last brief, and say whether any
    falsifier fired.
+4. After a gameweek has played, remember points are not final until 09:00 UK the
+   next morning. A `calibration deferred` finding is expected and self-healing —
+   don't flag it as a problem, and don't quote last gameweek's score or bonus as
+   settled before then. If a chip window is about to close (first-half copies
+   expire 2 January), say so under "Needs you".
 
 You are unattended: never wait for an answer; record owner decisions with
 `uv run fpl pending add "<text>"`. Never submit anything to the FPL site.

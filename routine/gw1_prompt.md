@@ -14,10 +14,19 @@ over its horizon; don't stretch reasoning past it).
    so the highest-value facts are: confirmed starters, new-signing roles,
    penalty takers, injuries, and pre-season minutes. Web research is your job
    here — press conferences, predicted lineups, beat writers.
-3. Write what you find as **minutes signals** (`xmins_min`/`xmins_max` with a
-   source). Then `uv run fpl daily --force` once to merge them.
+3. Write what you find as **minutes signals** — prefer the `role:` vocabulary
+   (`expected_starter`, `rotation_risk`, `managed_minutes`, `bench_role`,
+   `not_in_predicted_xi`, `ruled_out`) over raw bounds, each with a source. Then
+   `uv run fpl daily --force` once to merge them.
 4. Compare the model's build against expert consensus where they disagree:
    `uv run fpl build` vs `uv run fpl build --lock <ids>`, present both EPs.
+5. Preseason the model is at its weakest: team strength ratings may still be all
+   zero (fixture difficulty then reads neutral, and the report says so), and
+   prior-season scoring crosses the BPS rework, so cold-start uncertainty flags
+   are expected rather than alarming. Say plainly which picks rest on a price
+   prior rather than evidence. Bench Boost and Triple Captain are technically
+   playable in GW1 — hold both unless the owner asks; the initial squad is the
+   real wildcard.
 
 The brief is the decision document. For every non-obvious pick, one line of
 reasoning and its source. End with a **Falsifiers** section: for the captain

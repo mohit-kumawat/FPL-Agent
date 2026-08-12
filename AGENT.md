@@ -31,6 +31,54 @@ the owner's explicit go-ahead in that conversation.**
    anything needing a decision. Keep it short on quiet days ("rest day, no
    action").
 
+## 2026/27 rules that change how you work
+
+Verified on 2026-08-12 against `bootstrap.game_config` (the live rulebook FPL
+publishes) and the official announcements. **The pipeline re-checks the scoring
+table on every run**, so you never need to research whether the rules changed —
+spend research time on team news instead.
+
+**Points are not final until 09:00 UK the morning after a gameweek's last
+match.** Lockdown moved this season (it used to be about an hour after the final
+whistle) so late bonus and defensive-contribution corrections can land. What
+that means for you:
+
+- A `[DATA] GW<n> calibration deferred — before the 09:00 UK lockdown` finding is
+  **expected, not a fault**. The pipeline scores that gameweek automatically on a
+  later run once points are final. Nothing for you to do, and nothing to report
+  as broken.
+- Never present a gameweek's score, its bonus, or the model's accuracy as final
+  before lockdown, and never write a `memory/learnings.md` entry off provisional
+  points. In-play "projected bonus" (new this season, appears after 20 minutes of
+  each match and moves) is a projection, not data.
+- This is a **different clock from prices**, which change at 00:00 UK. Don't
+  conflate them when explaining timing to the owner.
+
+**BPS was reworked** to cut overlap with defensive contribution and improve bonus
+prospects for keepers, full-backs and attackers — "save from outside the box" is
+gone, saving a big chance is +1, and a penalty save drops from 8 BPS to 7. So
+last season's bonus patterns are a weak guide this season, most of all for
+keepers and full-backs. Never write a signal whose reasoning is "he's a bonus
+magnet": that was always a quality opinion, and now it is a quality opinion built
+on rules that no longer exist. The model already downweights prior-season scoring
+across the rule change — do not re-add it by hand with `ep_per_gw`.
+
+**No extra December transfers this season** (there is no AFCON). Don't plan around
+bonus free transfers in December, and don't expect an AFCON minutes exodus in
+December/January.
+
+**If a report ever warns `SCORING RULE DRIFT`, stop and tell the owner.** It means
+FPL changed a points value that the model still applies the old way, so every
+projection in that report is suspect. Do not work around it with signals. Two
+rules cannot be auto-checked because the API doesn't publish them — saves-per-point
+(3) and concessions-per-point (2) — so if you ever read an official announcement
+changing either, that is worth raising even though no warning fires.
+
+**Settled for 2026/27, so don't spend research on it:** every scoring value,
+defensive contribution at 2 points (10 CBIT for defenders, 12 including
+recoveries for everyone else), squad 15/11 with max 3 per club and £100.0m,
+five banked free transfers, and the 0.5 sell-on fee.
+
 ## Signal file schema (`signals/YYYY-MM-DD-<slug>.yaml`)
 
 ```yaml
@@ -75,10 +123,16 @@ default prior early season and no assumed double after GW30.
 **Chips in 2026/27:** there are TWO full sets — Wildcard, Free Hit, Bench Boost
 and Triple Captain in each half. Bench Boost and Triple Captain are playable from
 GW1; Wildcard and Free Hit open at GW2. Only ONE chip may be played per
-gameweek, and an unused first-half copy expires at the split (it does not carry
-over). Windows are read from the API, so the report states which copy is live.
-Keep `chips_available` in `squad.yaml` accurate — remove each name as it is used,
-or the advice will offer a chip you no longer hold.
+gameweek, and an unused first-half copy **expires at the split** (deadline 13:30
+GMT, Saturday 2 January) — it does not carry over. Windows are read from the API,
+so the report states which copy is live. Two duties follow:
+
+- Keep `chips_available` in `squad.yaml` accurate — remove each name as it is
+  used, or the advice will offer a chip the owner no longer holds. This file is
+  the only record of what has been spent.
+- As the split approaches, an unused first-half chip is a **use-it-or-lose-it**
+  decision. Raise it in the brief's "Needs you" rather than letting it expire
+  silently.
 
 **Write minutes facts, not opinions.** Your job in a signal is to tell the model
 *who is playing* — never *who is good*; the model owns quality. The blind-label
@@ -145,7 +199,9 @@ ceiling and consensus safety are legitimate tie-breakers for the owner to choose
 - `memory/learnings.md` — three tiers: VALIDATED (tested on historical data, may
   drive config changes) / OBSERVED FACTS / HYPOTHESES (never act on these).
   New lessons enter as hypotheses; promote only after eval-suite evidence.
-- `memory/predictions/` — auto-saved; scored automatically after each GW.
+- `memory/predictions/` — auto-saved; scored automatically once a gameweek's
+  points are final (09:00 UK the morning after its last match). A deferral is
+  retried on later runs, so an unscored gameweek needs no intervention.
 
 ## Reference material
 
@@ -179,7 +235,12 @@ changes.
 
 - GW1 deadline: 2026-08-21 17:30 UTC. The account has NO team
   yet — the first job is entering the `fpl build` squad before that deadline.
-- Wildcard windows: GW2–19 and GW20–38. Preseason changes are free.
-- Free transfers bank up to 5. Selling price: if the price **rose**,
-  `purchase + floor(profit/2)`; if it **fell**, the current price — losses are
-  taken in full, with no floor at the purchase price.
+- Chip windows: Wildcard and Free Hit GW2–19 and GW20–38; Bench Boost and Triple
+  Captain GW1–19 and GW20–38. Two full sets, one chip per gameweek, first-half
+  copies expire 13:30 GMT Saturday 2 January. Preseason squad changes are free.
+- Gameweek points go final at 09:00 UK the morning after the last match; prices
+  change at 00:00 UK. Different clocks.
+- Free transfers bank up to 5, with no extra December allocation this season.
+  Selling price: if the price **rose**, `purchase + floor(profit/2)`; if it
+  **fell**, the current price — losses are taken in full, with no floor at the
+  purchase price.
