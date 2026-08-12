@@ -313,14 +313,23 @@ notes: "Saka in full training, expected to start GW1"
 adjustments:
   - player_id: 12       # FPL element id
     xmins_min: 0.9      # floor on the minutes fraction — "nailed"
-    xmins_max: 0.45     # cap — "not in the predicted XI"
-    ep_per_gw: 0.4      # quality/role news only, |value| ≤ 2
     reason: "confirmed starter, was priced as a rotation risk"
+  - player_id: 388      # a different player, NOT expected to start
+    xmins_max: 0.45     # cap — "not in the predicted XI"
+    reason: "omitted from the predicted XI"
 ```
 
-Discipline: minutes news uses `xmins_*`; only quality or role news that minutes
-cannot express uses `ep_per_gw`. Minutes bounds are not confidence-weighted, since
-they are facts or they should not be written.
+Use `xmins_min` **or** `xmins_max` per player, never both — a floor above a cap
+rejects the whole file.
+
+Discipline: signals carry **minutes facts**, not opinions — the agent tells the
+model who is *playing*, never who is *good* (the blind-label test in
+`eval/agent-backtest-report.md` measured agent quality-opinions at negative
+value). `ep_per_gw` remains only for the rare quality/role fact minutes can't
+express (pen duty gained or lost, position change): it needs a direct quote in
+`source` and should stay within ±0.5 even though validation allows ±2. Minutes
+bounds are not confidence-weighted, since they are facts or they should not be
+written.
 
 **Validation is enforced, not advisory.** A file is ignored entirely, and the
 reason printed in the report, if it has expired, fails to parse, sets a floor

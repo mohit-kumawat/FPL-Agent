@@ -9,9 +9,14 @@ reveal your team plans. Only `*.example.yaml` files are tracked; see
 
 Discipline that keeps this useful:
 
-- **Minutes news** (predicted XI, injury return, rotation) -> `xmins_min` / `xmins_max`
-- **Quality/role news** that minutes can't express (gained penalties, moved
-  forward) -> `ep_per_gw`, kept within [-2, 2]
+- **Minutes news** (predicted XI, injury return, rotation) -> `xmins_min` /
+  `xmins_max`. This is the signal type that earns its keep — write these.
+- **Quality/role news** is a *last resort*: only a fact minutes can't express
+  (gained/lost penalties, position change) -> `ep_per_gw`, with a direct quote
+  in `source`, kept within ±0.5 (validation allows ±2; don't use the headroom).
+  "He's better than the model thinks" is never a signal — the blind-label test
+  in `eval/agent-backtest-report.md` measured that kind of opinion at negative
+  value. Not writing a signal is the normal outcome of research.
 - Set `confidence: high|medium|low` — it scales `ep_per_gw` by 1.0/0.6/0.3.
   A manager's own words are `high`; an aggregator's guess is `low`.
 - Don't restate what the API already knows (`news`, `chance_of_playing`).

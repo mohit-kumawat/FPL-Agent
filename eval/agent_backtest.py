@@ -192,8 +192,15 @@ def best_xi_from(squad_ep: pd.DataFrame, act: pd.Series) -> float:
 
 
 def template_arm(season: str, max_gw: int = GWS) -> dict:
-    """What the crowd owned: most-selected legal XI each GW, most-selected captain."""
+    """What the crowd owned: most-selected legal XI each GW, most-selected captain.
+
+    Raw merged rows label keepers "GK" while the replay layers normalize to
+    "GKP" -- normalize here too, or the crowd XI silently fields ten men. The
+    captain is the most-owned player IN the XI, not whoever pd.concat put
+    first (that used to be the goalkeeper row).
+    """
     df = replay._season_gws(season)
+    df = df.assign(position=df["position"].replace({"GK": "GKP"}))
     weekly = []
     for gw in range(1, max_gw + 1):
         g = df[df["round"] == gw].copy()
@@ -204,8 +211,10 @@ def template_arm(season: str, max_gw: int = GWS) -> dict:
         by = {p: g[g["position"] == p] for p in ("GKP", "DEF", "MID", "FWD")}
         pick = pd.concat([by["GKP"].head(1), by["DEF"].head(4),
                           by["MID"].head(4), by["FWD"].head(2)])
+        assert len(pick) == 11, f"template XI has {len(pick)} players at GW{gw}"
         pts = float(pick["total_points"].sum())
-        pts += float(pick.iloc[0]["total_points"])      # captain = most-owned
+        captain = pick.loc[pick["selected"].idxmax()]
+        pts += float(captain["total_points"])
         weekly.append(pts)
     return {"total": round(sum(weekly)), "weekly": [round(w) for w in weekly]}
 
@@ -308,8 +317,13 @@ def main() -> None:
         log(f"- per-GW (template): {tmpl['weekly']}")
         log("")
 
-    Path(__file__).with_name("agent-backtest-report.md").write_text("\n".join(OUT) + "\n")
-    print("\nwrote eval/agent-backtest-report.md")
+    # Deliberately NOT agent-backtest-report.md: that file carries hand-written
+    # sections (contamination probe, Phase 2, CIs) this script doesn't produce,
+    # and overwriting it would silently destroy the evidence base the routine's
+    # prompts cite. Merge updated numbers into the report by hand.
+    dest = Path(__file__).with_name("agent-backtest-phase01.md")
+    dest.write_text("\n".join(OUT) + "\n")
+    print(f"\nwrote {dest.name} (merge into agent-backtest-report.md by hand)")
 
 
 if __name__ == "__main__":

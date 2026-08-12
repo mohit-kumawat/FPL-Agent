@@ -190,13 +190,16 @@ def load_signals(now: datetime | None = None) -> tuple[pd.DataFrame, list[dict]]
       notes: "free text"
       adjustments:
         - player_id: 448
-          ep_per_gw: -0.5     # optional EP/GW nudge, |value| <= 2 (quality news)
+          ep_per_gw: -0.5     # LAST RESORT: |value| <= 2 enforced here, but
+                              # policy (AGENT.md) is +/-0.5 max, direct quote
+                              # in `source`, role facts only
           xmins_min: 0.9      # optional floor on expected-minutes fraction
           xmins_max: 0.5      # optional cap ("not a predicted starter")
           reason: "why"
 
-    Minutes news should use xmins_min/xmins_max; use ep_per_gw for quality/role
-    information that minutes can't express (pen duty gained, position change).
+    Minutes news should use xmins_min/xmins_max — signals carry minutes FACTS,
+    not quality opinions. ep_per_gw exists only for role information minutes
+    can't express (pen duty gained, position change).
     Minutes bounds are NOT confidence-weighted — they are facts or they should
     not be written.
 

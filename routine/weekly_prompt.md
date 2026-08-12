@@ -13,6 +13,9 @@ broke even after hits. A transfer must argue its way past that: recommend one
 only when the report shows clear net EP gain, and say what the gain is.
 
 1. Orient: `uv run fpl status`, then `uv run fpl daily`, read today's report.
+   In a **teamnews-window** run use `uv run fpl daily --force` instead — the
+   pipeline dedupes per day, and the morning report predates the press
+   conferences this run exists to catch.
 2. Research only what the report's **Monitor next** flags. Minutes facts are
    the valuable output: injuries, suspensions, predicted lineups, press
    conferences. Write findings as minutes signals (`xmins_min`/`xmins_max`,

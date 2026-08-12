@@ -28,18 +28,26 @@ launchd (fixed slots; gate maps each wake-up to a window or a skip)
 
 ## The cadence
 
-A gameweek has one deadline, so a gameweek gets at most **three runs**:
+A gameweek has one deadline, so the runs cluster around it:
 
 | Window | When (to deadline) | Job |
 |---|---|---|
-| `scan` | >30h, once per GW | news sweep, write minutes signals |
+| `scan` | >30h out, at most every 72h | news sweep, write minutes signals |
 | `decision` | 4–30h | the recommendation run |
 | `teamnews` | 0.5–4h | check leaked lineups against the brief's falsifiers |
 
-One `ok` run per (GW, window); failures retry at later slots, at most 3
-attempts per window, then the window is given up — a dead API key can't burn
-tokens at every slot forever. Inside 30 minutes of the deadline nothing fires:
-advice that can't be acted on isn't worth paying for.
+One `ok` run per (GW, `decision`/`teamnews`) window; scan repeats every ~3 days
+so a three-week preseason gets several research passes, not one. Failures retry
+at later slots, at most 3 attempts per window, then the window is given up — a
+dead API key can't burn tokens at every slot forever. Inside 30 minutes of a
+live deadline nothing fires: advice that can't be acted on isn't worth paying
+for.
+
+Dedup is recency-scoped, never forever — a `decision` run only counts against
+this window for 36h, so last season's ledger can't silence this season. And a
+deadline sitting in the *past* is treated as a stale state file, not a stop:
+it classifies as `scan`, the run refreshes the state, and the routine rolls to
+the next gameweek on its own.
 
 ## Setup (once)
 

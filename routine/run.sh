@@ -82,23 +82,32 @@ finish() {  # exit-code
 }
 
 # --- gate ------------------------------------------------------------------
-# Exit 0 -> run, stdout is `mode|gw|window|reason`. Only 78 means "deliberately
-# skip". Anything else is the gate itself being broken and must fail open -- a
-# gate that can't decide has to be louder than a quiet day, not quieter.
-GATE_OUT="$(python3 "$PROJECT_DIR/routine/gate.py" 2>&1)"; GATE_RC=$?
+# Exit 0 -> run, stdout's LAST line is `mode|gw|window|reason` (stderr goes to
+# the log, never into the parse channel -- a stray warning must not corrupt the
+# decision). Only 78 means "deliberately skip". Anything else is the gate
+# itself being broken and must fail open -- a gate that can't decide has to be
+# louder than a quiet day, not quieter.
+GATE_OUT="$(python3 "$PROJECT_DIR/routine/gate.py" 2>>"$LOG")"; GATE_RC=$?
+GATE_LINE="$(printf '%s\n' "$GATE_OUT" | tail -1)"
 if [ $GATE_RC -eq 78 ]; then
-  log "skip: $GATE_OUT"
+  log "skip: $GATE_LINE"
   exit 0
 elif [ $GATE_RC -ne 0 ]; then
-  log "gate check failed (exit $GATE_RC), running anyway: $GATE_OUT"
-  GATE_OUT="weekly|0|scan|gate broken, failed open"
+  log "gate check failed (exit $GATE_RC), running anyway: $GATE_LINE"
+  # Derive the mode instead of guessing: 15 players in squad.yaml means Part 2.
+  if [ "$(grep -c '^[[:space:]]*- id:' "$PROJECT_DIR/squad.yaml" 2>/dev/null)" -ge 15 ]; then
+    GATE_LINE="weekly|0|scan|gate broken, failed open"
+  else
+    GATE_LINE="gw1|0|scan|gate broken, failed open"
+  fi
 fi
-MODE="$(printf '%s' "$GATE_OUT" | cut -d'|' -f1)"
-GW="$(printf '%s' "$GATE_OUT" | cut -d'|' -f2)"
-WINDOW="$(printf '%s' "$GATE_OUT" | cut -d'|' -f3)"
-GATE_REASON="$(printf '%s' "$GATE_OUT" | cut -d'|' -f4-)"
-case "$MODE" in gw1|weekly) ;; *) MODE="weekly"; GW=0; WINDOW="scan";; esac
+MODE="$(printf '%s' "$GATE_LINE" | cut -d'|' -f1)"
+GW="$(printf '%s' "$GATE_LINE" | cut -d'|' -f2)"
+WINDOW="$(printf '%s' "$GATE_LINE" | cut -d'|' -f3)"
+GATE_REASON="$(printf '%s' "$GATE_LINE" | cut -d'|' -f4-)"
+case "$MODE" in gw1|weekly) ;; *) MODE="weekly";; esac
 case "$GW" in ''|*[!0-9]*) GW=0;; esac
+case "$WINDOW" in scan|decision|teamnews) ;; *) WINDOW="scan";; esac
 
 PROMPT_FILE="$PROJECT_DIR/routine/${MODE}_prompt.md"
 BRIEF_STEM="$TODAY-$WINDOW"
@@ -204,10 +213,12 @@ elif ! brief_is_fresh "$START"; then
 else
   log "ok (${ELAPSED}s)"
   ledger "ok" "$ELAPSED"
-  # Seal the recommendation so the forward test can't be quietly revised.
-  # Scan runs are research, not recommendations -- nothing to lock.
+  # Seal the recommendation so the forward test can't be quietly revised. The
+  # lock reads the brief the agent just wrote plus today's report JSON -- the
+  # artifacts the owner actually acts on -- never a recomputed one. Scan runs
+  # are research, not recommendations: nothing to lock.
   if [ "$WINDOW" != "scan" ] && [ "${FPL_ROUTINE_SKIP_LOCK:-0}" != "1" ]; then
-    uv run python "$PROJECT_DIR/eval/phase3_prereg.py" lock >> "$LOG" 2>&1 \
+    uv run python "$PROJECT_DIR/eval/phase3_prereg.py" lock "$BRIEF" "$WINDOW" >> "$LOG" 2>&1 \
       && log "recommendation hash-locked (eval/phase3-predictions.jsonl)" \
       || log "warning: phase3 lock failed (run continues; forward test loses this point)"
   fi

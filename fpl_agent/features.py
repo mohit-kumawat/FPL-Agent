@@ -99,7 +99,8 @@ def set_piece_bonus(players: pd.DataFrame) -> pd.Series:
     Deliberately small: an incumbent taker's penalty/set-piece output is already
     embedded in his historical xG/xA, so a large injection double-counts. This
     covers only the marginal safety of holding the duty. A player who newly
-    GAINS pen duty should get an explicit signal (ep_per_gw), not a table edit.
+    GAINS pen duty should get an explicit signal (ep_per_gw — the sanctioned
+    last-resort use; see AGENT.md's signal policy), not a table edit.
     """
     bonus = pd.Series(0.0, index=players.index)
     pens = pd.to_numeric(players.get("penalties_order"), errors="coerce")

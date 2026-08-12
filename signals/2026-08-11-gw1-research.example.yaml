@@ -15,8 +15,11 @@ notes: >
 adjustments:
   - player_id: 411   # Haaland (MCI FWD 15.5)
     xmins_min: 0.92
-    ep_per_gw: 0.2
-    reason: "nailed + rested + consensus top captain; last season's 34 starts understates GW1 certainty"
+    reason: "nailed + rested; predicted XI everywhere"
+    # NOT paired with an ep_per_gw nudge: "consensus top captain" is an opinion
+    # about quality, and quality belongs to the model. Signals carry minutes
+    # facts (see AGENT.md — the blind-label test priced agent opinions at
+    # negative value).
   - player_id: 388   # Guéhi (MCI DEF 6.0)
     xmins_max: 0.45
     reason: "not in predicted City XI under Maresca (Khusanov/Dias/Gvardiol preferred)"
@@ -26,6 +29,9 @@ adjustments:
   - player_id: 346   # Calvert-Lewin (LEE FWD 6.0)
     xmins_min: 0.85
     reason: "preseason brace, predicted starter"
-  - player_id: 426   # B.Fernandes (MUN MID 12.0)
-    ep_per_gw: 0.2
-    reason: "safest MUN attacker per consensus; pen taker"
+  # ep_per_gw is a LAST RESORT: only a role fact minutes can't express, with a
+  # direct quote in source, kept within +/-0.5. Shape it like this (player id
+  # illustrative):
+  # - player_id: 999
+  #   ep_per_gw: 0.3
+  #   reason: 'took over penalties — manager: "he is our taker now" (12 Aug presser)'
