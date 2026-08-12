@@ -66,6 +66,10 @@ def lock() -> None:
 
     report_path, report = _latest_report()
     stage = report.get("stage") or {}
+    # The brief is sealed by HASH and referenced by path, not embedded: over a
+    # season the copies would dominate the ledger, and the hash is what actually
+    # makes revision detectable. Entries written before this change still carry
+    # `brief` and still verify, because the digest covers the payload as stored.
     payload = {
         "season": config.CURRENT_SEASON,
         "locked_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -73,8 +77,9 @@ def lock() -> None:
         "gw": stage.get("next_gw"),
         "next_deadline": stage.get("next_deadline"),
         "brief_file": brief_path.name,
+        "brief_path": str(brief_path),
+        "brief_bytes": len(brief.encode()),
         "brief_sha256": hashlib.sha256(brief.encode()).hexdigest(),
-        "brief": brief,
         "report_file": report_path.name if report_path else None,
         "decision": report.get("decision"),
         "captain": report.get("captain"),

@@ -1,0 +1,111 @@
+{
+  "generated_utc": "2026-08-12T10:38:52+00:00",
+  "season": "2026-27",
+  "gameweek": {
+    "next": 1,
+    "deadline": "2026-08-21T17:30:00Z",
+    "current": null,
+    "finished": 0
+  },
+  "squad": {
+    "has_team": false,
+    "bank": 100.0,
+    "free_transfers": 0,
+    "strategy_mode": "safe"
+  },
+  "chips": {
+    "held": [
+      "3xc",
+      "bboost",
+      "freehit",
+      "wildcard1",
+      "wildcard2"
+    ],
+    "playable_now": [
+      "bboost",
+      "3xc"
+    ],
+    "first_half_expiring": [],
+    "windows": {
+      "wildcard": [
+        [
+          2,
+          19
+        ],
+        [
+          20,
+          38
+        ]
+      ],
+      "freehit": [
+        [
+          2,
+          19
+        ],
+        [
+          20,
+          38
+        ]
+      ],
+      "bboost": [
+        [
+          1,
+          19
+        ],
+        [
+          20,
+          38
+        ]
+      ],
+      "3xc": [
+        [
+          1,
+          19
+        ],
+        [
+          20,
+          38
+        ]
+      ]
+    }
+  },
+  "trajectory": {
+    "available": false,
+    "why": "no entry_id in squad.yaml yet"
+  },
+  "model_calibration": {
+    "gws_scored": 0,
+    "recent_mae": [],
+    "mae_trend": null,
+    "unscored_pending": []
+  },
+  "research_accuracy": {
+    "gws_scored": 0,
+    "hits": 0,
+    "misses": 0,
+    "accuracy": null,
+    "least_reliable": []
+  },
+  "recent_decisions": [
+    {
+      "date": "2026-08-11",
+      "action": "initial_squad_proposal",
+      "captain": "B.Fernandes",
+      "net_gain": null,
+      "repeats": 15
+    }
+  ],
+  "open_items": [
+    "Enter GW1 squad on FPL site",
+    "Seed squad.yaml with purchase prices after saving squad",
+    "Store entry_id in squad.yaml after first save",
+    "Mohit: choose GW1 squad variant (spread 59.8 EP vs Haaland-locked 58.5 EP) before Aug 20"
+  ],
+  "data_freshness": {
+    "fetched_at": "2026-08-12T10:38:52+00:00",
+    "blockers": [],
+    "warnings": [
+      "team strength ratings are all zero (FPL publishes them close to the season) \u2014 fixture difficulty is neutral until they land"
+    ]
+  }
+}

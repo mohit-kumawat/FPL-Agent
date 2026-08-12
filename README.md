@@ -35,7 +35,7 @@ and produces recommendations for a human to act on.
 |---|---|
 | Docs | This file (full reference) · [AGENT.md](AGENT.md) (agent runbook) · [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Evidence | [eval/2024-25-report.md](eval/2024-25-report.md) · [eval/strategy-sim-report.md](eval/strategy-sim-report.md) · [eval/ablation-report.md](eval/ablation-report.md) |
-| Tests | `uv run pytest -q` (138 offline tests) · `uv run python eval/run_backtests.py` (replay suite) |
+| Tests | `uv run pytest -q` (159 offline tests) · `uv run python eval/run_backtests.py` (replay suite) |
 | Licence | MIT |
 
 *The rest of this file is the complete technical reference: exactly what the code
@@ -67,12 +67,14 @@ Module map:
 | `policy.py` | 395 | Decision thresholds, captaincy + strategy modes, chip EV, price timing, flags |
 | `data.py` | 365 | API client, snapshots, price-freshness logic, change detection, history loaders |
 | `models.py` | 345 | Minutes model + distribution (p_start/p_60/p_bench), prior tier, ensemble, component EP |
-| `memoryio.py` | 335 | State, decisions, predictions, signal roles/validation, chip scenarios |
+| `memoryio.py` | 512 | State, decisions, predictions, signal roles/validation + scoring, learnings check |
 | `replay.py` | 268 | Point-in-time historical reconstruction with leakage assertions |
-| `report.py` | 257 | Markdown + JSON report writer |
-| `daily.py` | 231 | Orchestrator: verify → detect changes → trigger matrix → policy |
+| `report.py` | 286 | Markdown + JSON report writer |
+| `daily.py` | 336 | Orchestrator: verify → changes → triggers → policy → digest |
 | `optimizer.py` | 193 | Three PuLP integer programs (build / XI / transfers) |
 | `simulate.py` | 190 | Seeded Monte Carlo point distributions (haul/blank tails, captaincy) |
+| `digest.py` | 218 | Season digest + the compact context handed to the next run |
+| `retention.py` | 143 | Snapshot pruning, expired-signal archiving, log rotation |
 | `features.py` | 160 | Fixture channels, set-piece flags, rolling form |
 | `lifecycle.py` | 160 | Gameweek stage machine and pending items |
 | `verify.py` | 140 | Pre-flight state verification (blocking) |
@@ -412,6 +414,32 @@ folklore and folklore into a model constant.
 
 ---
 
+### 8.1 Memory across a 40-week season
+
+Every scheduled run is a fresh agent session with no conversation history, so
+files are the only continuity — and the handoff has to be *generated*, because
+the component that would otherwise maintain it is the one that forgets.
+
+`fpl daily` therefore compacts the season into `memory/current-context.md` (~1KB)
+on every run: gameweek and deadline, squad and bank, chips held with an expiry
+countdown, points and rank, the model's recent calibration trend, **the agent's
+own research accuracy and least-reliable sources**, and the last few decisions
+with repeats collapsed. That file is the agent's memory; the ledgers behind it
+(`calibration.jsonl`, `signal_log.jsonl`, `signal_scores.jsonl`,
+`decisions.jsonl`) are append-only evidence it does not have to read.
+
+Two feedback loops close automatically once a gameweek's points are final:
+predictions are scored into the calibration trend, and every minutes claim a
+signal made is checked against real minutes and attributed to its source file —
+so the agent finds out which of its own research keeps being wrong, which the
+model's accuracy never measured.
+
+Retention is enforced in code and documented in
+[memory/README.md](memory/README.md): snapshots keep 14 days plus every deadline
+day (~790MB/season → ~130MB, audit trail intact), expired signals are archived so
+they stop emitting an "IGNORED" line into every future report, and logs rotate at
+30 days.
+
 ## 9. Operating the agent
 
 **Verify first, analyse second, recommend last.** Full contract in `AGENT.md`.
@@ -448,7 +476,7 @@ uv run fpl rate                   # grade squad.yaml against optimal
 uv run fpl pending [list|add <text>|done <substr>]
 uv run fpl backtest               # model A/B/ensemble, out-of-sample
 uv run fpl refresh                # force re-fetch
-uv run pytest -q                  # 138 offline tests, no network
+uv run pytest -q                  # 159 offline tests, no network
 uv run python eval/run_backtests.py    # point-in-time replay suite
 uv run python eval/strategy_sim.py     # full-season strategy return
 uv run python eval/ablation.py         # ablation ladder + bootstrap CIs

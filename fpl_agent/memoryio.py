@@ -6,6 +6,7 @@ write memory without running Python.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,10 @@ RUNS_FILE = config.MEMORY_DIR / "runs.jsonl"
 PREDICTIONS_DIR = config.MEMORY_DIR / "predictions"
 SIGNALS_DIR = config.ROOT / "signals"
 LEARNINGS_FILE = config.MEMORY_DIR / "learnings.md"
+# Append-only evidence that the digest compacts into next run's context.
+CALIBRATION_FILE = config.MEMORY_DIR / "calibration.jsonl"
+SIGNAL_LOG_FILE = config.MEMORY_DIR / "signal_log.jsonl"
+SIGNAL_SCORES_FILE = config.MEMORY_DIR / "signal_scores.jsonl"
 
 for _d in (PREDICTIONS_DIR, SIGNALS_DIR):
     _d.mkdir(parents=True, exist_ok=True)
@@ -88,6 +93,171 @@ def last_decision() -> dict | None:
         return None
     lines = DECISIONS_FILE.read_text().strip().splitlines()
     return json.loads(lines[-1]) if lines else None
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    out = []
+    for line in path.read_text().splitlines():
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return out
+
+
+def log_calibration(score: dict) -> None:
+    """Persist a scored gameweek so the digest can show a trend, not one number."""
+    if not any(r.get("gw") == score.get("gw") for r in _read_jsonl(CALIBRATION_FILE)):
+        _append(CALIBRATION_FILE, score)
+
+
+def calibration_history(last: int = 6) -> list[dict]:
+    return sorted(_read_jsonl(CALIBRATION_FILE), key=lambda r: r.get("gw", 0))[-last:]
+
+
+def log_applied_signals(gw: int, frame: pd.DataFrame) -> None:
+    """Record which minutes claims were live for a gameweek, with attribution.
+
+    Written at prediction time because that is the only moment we know what the
+    recommendation was actually based on. Scored after the gameweek by
+    score_signals(), which is how the agent finds out whether its research was
+    any good — the model's own accuracy never measured that.
+    """
+    if frame is None or not len(frame):
+        return
+    seen = {(r.get("gw"), r.get("player_id")) for r in _read_jsonl(SIGNAL_LOG_FILE)}
+    for pid, row in frame.iterrows():
+        lo, hi = row.get("xmins_min"), row.get("xmins_max")
+        if pd.isna(lo) and pd.isna(hi):
+            continue                      # ep_per_gw-only: nothing minutes-shaped
+        if (gw, int(pid)) in seen:
+            continue
+        _append(SIGNAL_LOG_FILE, {
+            "gw": int(gw), "player_id": int(pid),
+            "xmins_min": None if pd.isna(lo) else float(lo),
+            "xmins_max": None if pd.isna(hi) else float(hi),
+            "sources": row.get("sources") or "",
+        })
+
+
+def score_signals(gw: int, actual: pd.DataFrame) -> dict | None:
+    """Did the gameweek's minutes claims hold? Scored only once per gameweek.
+
+    A floor claim (`xmins_min`) predicts the player plays roughly that share of
+    90; a cap (`xmins_max`) predicts he does not exceed it. Both are checked
+    against real minutes with a 15-minute tolerance, because a claim of "starts"
+    is not falsified by an 80th-minute substitution.
+    """
+    claims = [r for r in _read_jsonl(SIGNAL_LOG_FILE) if r.get("gw") == gw]
+    if not claims:
+        return None
+    if any(r.get("gw") == gw for r in _read_jsonl(SIGNAL_SCORES_FILE)):
+        return None                       # already scored; never double-count
+    mins = actual.groupby("element")["minutes"].sum() if len(actual) else pd.Series(dtype=float)
+
+    tol = 15.0
+    hits, misses, by_source, unscored = 0, 0, {}, 0
+    for c in claims:
+        pid = int(c["player_id"])
+        if pid not in mins.index:
+            unscored += 1                 # not in the panel: no evidence either way
+            continue
+        played = float(mins.loc[pid])
+        lo, hi = c.get("xmins_min"), c.get("xmins_max")
+        ok = True
+        if lo is not None:
+            ok = ok and played >= float(lo) * 90.0 - tol
+        if hi is not None:
+            ok = ok and played <= float(hi) * 90.0 + tol
+        hits, misses = (hits + 1, misses) if ok else (hits, misses + 1)
+        for src in [s for s in str(c.get("sources", "")).split(",") if s]:
+            agg = by_source.setdefault(src, {"hit": 0, "miss": 0})
+            agg["hit" if ok else "miss"] += 1
+
+    record = {"gw": int(gw), "claims": len(claims), "hits": hits, "misses": misses,
+              "unscored": unscored, "by_source": by_source}
+    _append(SIGNAL_SCORES_FILE, record)
+    return record
+
+
+def signal_scorecard() -> dict:
+    """Season-to-date research accuracy, and the least reliable sources."""
+    rows = _read_jsonl(SIGNAL_SCORES_FILE)
+    hits = sum(r.get("hits", 0) for r in rows)
+    misses = sum(r.get("misses", 0) for r in rows)
+    by_source: dict[str, dict] = {}
+    for r in rows:
+        for src, agg in (r.get("by_source") or {}).items():
+            cur = by_source.setdefault(src, {"hit": 0, "miss": 0})
+            cur["hit"] += agg.get("hit", 0)
+            cur["miss"] += agg.get("miss", 0)
+    worst = sorted((s for s in by_source.items() if sum(s[1].values()) >= 2),
+                   key=lambda kv: kv[1]["hit"] / max(1, sum(kv[1].values())))[:3]
+    return {"gws_scored": len(rows), "hits": hits, "misses": misses,
+            "accuracy": round(hits / (hits + misses), 2) if hits + misses else None,
+            "least_reliable": [{"source": s, **a} for s, a in worst]}
+
+
+# ------------------------------------------------------------------ learnings
+LEARNING_TIERS = ("VALIDATED", "OBSERVED FACTS", "HYPOTHESES")
+TIER_CAPS = {"VALIDATED": 12, "OBSERVED FACTS": 20, "HYPOTHESES": 15}
+
+
+def validate_learnings(text: str | None = None) -> list[str]:
+    """Structural problems in learnings.md.
+
+    The three-tier split exists so a hunch cannot become a model constant, but
+    prose alone does not enforce it — over 40 weeks an unchecked file either
+    bloats or turns into folklore. Every entry therefore needs a date and, in
+    VALIDATED, a pointer to the evidence that promoted it. Warnings only: this
+    file is the agent's notebook, not a gate on recommendations.
+    """
+    if text is None:
+        text = LEARNINGS_FILE.read_text() if LEARNINGS_FILE.exists() else ""
+    if not text.strip():
+        return []
+    problems: list[str] = []
+    counts = dict.fromkeys(LEARNING_TIERS, 0)
+
+    # An entry is a bullet plus its indented continuation lines, so validate the
+    # whole entry: a date or evidence pointer often sits on a later line.
+    entries: list[tuple[int, str, str]] = []       # (line_no, tier, full text)
+    tier: str | None = None
+    for i, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if raw.startswith("#"):
+            # a non-tier heading (e.g. "Process rules") ends the tiered section;
+            # only tiered claims are held to the evidence rules
+            head = line.lstrip("#").strip().upper()
+            tier = next((t for t in LEARNING_TIERS if head.startswith(t)), None)
+            continue
+        if line.startswith(("- ", "* ")):
+            if tier is not None:
+                entries.append((i, tier, line))
+        elif entries and line and raw[:1].isspace() and tier is not None:
+            i0, t0, body = entries[-1]
+            entries[-1] = (i0, t0, f"{body} {line}")
+
+    for i, t, body in entries:
+        counts[t] += 1
+        if not re.search(r"\d{4}-\d{2}-\d{2}", body):
+            problems.append(f"line {i} ({t}): entry has no YYYY-MM-DD date")
+        if t == "VALIDATED" and not re.search(
+                r"eval/|report|GW\d+|MAE|rho|coverage|CI |\d+\s*pts", body):
+            problems.append(f"line {i} (VALIDATED): no evidence pointer — cite the "
+                            "eval report, metric, or gameweek that promoted it")
+    for t, n in counts.items():
+        if n > TIER_CAPS[t]:
+            problems.append(f"{t} has {n} entries (cap {TIER_CAPS[t]}) — prune or "
+                            "promote before adding more")
+    return problems
+
+
+def recent_decisions(last: int = 6) -> list[dict]:
+    """Compact decision history — the digest passes these instead of one entry."""
+    return _read_jsonl(DECISIONS_FILE)[-last:]
 
 
 def already_ran_today(kind: str) -> bool:
@@ -274,7 +444,14 @@ def load_signals(now: datetime | None = None) -> tuple[pd.DataFrame, list[dict]]
             str(doc.get("confidence", "medium")).lower(), 0.6)
         for adj in doc.get("adjustments", []) or []:
             pid = int(adj["player_id"])
-            r = rows.setdefault(pid, {"ep_per_gw": 0.0, "xmins_min": None, "xmins_max": None})
+            r = rows.setdefault(pid, {"ep_per_gw": 0.0, "xmins_min": None,
+                                      "xmins_max": None, "sources": ""})
+            # attribution: which file(s) moved this player, so score_signals can
+            # tell the agent WHICH source keeps being wrong
+            srcs = [s for s in r["sources"].split(",") if s]
+            if f.name not in srcs:
+                srcs.append(f.name)
+            r["sources"] = ",".join(srcs)
             r["ep_per_gw"] += weight * float(adj.get("ep_per_gw", 0.0))
             bounds = adjustment_bounds(adj)   # role defaults + explicit overrides
             if bounds.get("xmins_min") is not None:

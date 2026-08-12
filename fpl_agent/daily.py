@@ -10,8 +10,8 @@ from typing import Any
 
 import pandas as pd
 
-from . import (config, data, features, lifecycle, memoryio, models, optimizer,
-               policy, rating, report, simulate, verify)
+from . import (config, data, digest, features, lifecycle, memoryio, models,
+               optimizer, policy, rating, report, retention, simulate, verify)
 
 
 def _hours_to_deadline(boot: dict) -> float | None:
@@ -154,6 +154,11 @@ def run_daily(force: bool = False) -> dict:
         # done, or the fix-and-retry the blocker asks for is silently skipped
         memoryio.log_run({"kind": "daily_blocked", "triggers": ["blocked"],
                           "blockers": ver["blockers"]})
+        # a blocked run still hands over context — in fact this is when the next
+        # run most needs to know what is wrong and that no advice was produced
+        digest.write(digest.build(boot, fixtures, squad, state,
+                                  freshness=refreshed.get("freshness"),
+                                  verification=ver))
         md_path, json_path = report.write_report(ctx_blocked)
         return {**ctx_blocked, "report_md": str(md_path), "report_json": str(json_path)}
 
@@ -193,6 +198,8 @@ def run_daily(force: bool = False) -> dict:
         gw_next = changes["gw_state"]["next_gw"]
         if gw_next:
             memoryio.save_predictions(gw_next, ep)
+            # record the claims this recommendation rests on, while we still know
+            memoryio.log_applied_signals(gw_next, signal_adjust)
 
         # Calibrate every finished gameweek whose points are FINAL and which has
         # not been scored yet. 2026/27 lockdown is 09:00 UK the day after the
@@ -209,14 +216,21 @@ def run_daily(force: bool = False) -> dict:
                     ctx["findings"].append(
                         f"[DATA] GW{gw_done} calibration deferred — {why}")
                     continue
-                score = memoryio.score_predictions(
-                    gw_done, panel[panel["round"] == gw_done]
-                )
+                gw_panel = panel[panel["round"] == gw_done]
+                score = memoryio.score_predictions(gw_done, gw_panel)
                 if score:
+                    memoryio.log_calibration(score)     # trend, not one number
                     ctx["findings"].append(
                         f"[MODEL] GW{gw_done} calibration: MAE {score['mae_all']} "
                         f"(top-50: {score['mae_top50']})"
                     )
+                # were OUR minutes claims right? The model's accuracy never
+                # measured that, and it is the agent's only feedback loop.
+                sig = memoryio.score_signals(gw_done, gw_panel)
+                if sig and sig["hits"] + sig["misses"]:
+                    ctx["findings"].append(
+                        f"[SIGNAL] GW{gw_done} research: {sig['hits']} of "
+                        f"{sig['hits'] + sig['misses']} minutes claims held")
                 # mark scored either way: with no stored prediction (a gameweek
                 # from before this squad existed) there is nothing to retry
                 scored_gws.add(gw_done)
@@ -289,6 +303,7 @@ def run_daily(force: bool = False) -> dict:
     state["last_gw_state"] = changes["gw_state"]
     state["stage"] = {k: stage[k] for k in
                       ("stage", "next_gw", "next_deadline", "hours_to_deadline", "has_team")}
+    state["pending_snapshot"] = stage.get("pending") or []
     memoryio.save_state(state)
     if ctx["recommendation"]:
         prev_dec = memoryio.last_decision()
@@ -296,6 +311,24 @@ def run_daily(force: bool = False) -> dict:
         memoryio.log_decision(report.decision_summary(ctx))
     memoryio.log_run({"kind": "daily", "triggers": work["triggers"],
                       "models_ran": ctx["models_ran"]})
+
+    # learnings hygiene: warn, never block — an unpruned notebook becomes folklore
+    for problem in memoryio.validate_learnings()[:5]:
+        ctx["findings"].append(f"[DATA] learnings.md: {problem}")
+
+    # housekeeping before the digest, so the digest reports a pruned world
+    ctx["retention"] = retention.run_all(boot)
+    if ctx["retention"].get("signals_archived"):
+        ctx["findings"].append(
+            "[DATA] archived expired signals: "
+            + ", ".join(ctx["retention"]["signals_archived"][:6])
+            + " (they no longer clutter this report)")
+
+    # the handoff: compact everything this run learned into next run's context
+    dg = digest.build(boot, fixtures, squad, state,
+                      freshness=refreshed.get("freshness"), verification=ver)
+    digest.write(dg)
+    ctx["digest"] = dg
 
     md_path, json_path = report.write_report(ctx)
     ctx["report_md"] = str(md_path)

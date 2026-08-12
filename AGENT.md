@@ -8,7 +8,12 @@ the owner's explicit go-ahead in that conversation.**
 
 ## Daily procedure
 
-0. Orient: `uv run fpl status` — stage, pending items, last decision.
+0. Orient: read **`memory/current-context.md`** first — it is regenerated every
+   run and is the whole season in ~1KB: gameweek and deadline, squad and bank,
+   chips held with expiry warnings, points and rank, the model's recent
+   calibration, **your own research accuracy**, and the last few decisions.
+   Then `uv run fpl status` for pending items. Do not go spelunking through
+   `memory/` or old reports unless the context file points you there.
 1. Run the pipeline:
    ```
    uv run fpl daily
@@ -143,24 +148,19 @@ test (eval/agent-backtest-report.md, Phase 2) measured agent quality-judgement a
 direct quote in `source`, stays within ±0.5 even though validation allows ±2,
 and "I think he's underrated" is never a signal. Not writing a signal is the
 normal outcome of research.
-Player ids are FPL element ids. The reports don't carry them, so look them up in
-the newest snapshot — with `jq`, never by reading the file, which is ~1.3MB on a
-single line:
+**Element ids**: never guess one — a wrong id silently moves a different player.
+Look it up with `jq` (never Read the ~1.3MB single-line snapshot):
 
 ```
 jq -r '.elements[] | select(.web_name|test("Saka";"i")) | "\(.id) \(.web_name)"' \
   data/snapshots/bootstrap_*.json
 ```
 
-Never guess an id. A wrong one applies your adjustment to a different player and
-nothing will flag it.
-
-Add `confidence: high|medium|low` per file (default medium). It scales ep_per_gw
-by 1.0/0.6/0.3 — a manager quote is `high`; an aggregator's guess is `low`.
-Minutes bounds are unweighted: write them only when they're facts.
-
-Add `ttl_days:` (default 14) or an explicit `expires:` date. Expired files are
-ignored automatically — never rely on remembering to delete one.
+`confidence: high|medium|low` (default medium) scales `ep_per_gw` by 1.0/0.6/0.3 —
+a manager quote is `high`, an aggregator's guess is `low`. Minutes bounds are
+unweighted: write them only when they are facts. `ttl_days` (default 14) or an
+explicit `expires` date retires a file automatically; expired files are archived,
+so never rely on remembering to delete one.
 
 **Validation is enforced.** A file is ignored in full, with the reason printed in
 the report, if it has expired, fails to parse, names an unknown `role`, sets an
@@ -189,19 +189,41 @@ compare EP, and present the trade-off with your read. Example from 2026-08-11:
 spread build 59.1 EP vs Haaland-locked 58.1 EP for GW1 — within noise, so captaincy
 ceiling and consensus safety are legitimate tie-breakers for the owner to choose.
 
-## State you maintain
+## Memory: what you read, what you write
 
-- `squad.yaml` — source of truth for the squad. After the owner confirms transfers
-  or the initial squad, update `players` (id, name, purchase_price), `bank`,
-  `free_transfers`, `chips_available`, and `entry_id` once known.
-- `memory/decisions.jsonl` — appended automatically; read the last entry before
-  making a new recommendation and explain any flip.
+Every run is a fresh session, so files are the only continuity. The pipeline
+compacts them for you — don't rebuild that by hand.
+
+**Read** (in this order, and usually stop after the first two):
+
+- `memory/current-context.md` — generated every run. The season in ~1KB. This is
+  your memory; treat anything not in it as needing a reason to go looking.
+- today's `reports/<date>.md` — this run's model output and findings.
+- anything the context file explicitly points at, by id.
+
+**Write** (yours to maintain):
+
+- `squad.yaml` — source of truth for the squad. After the owner confirms
+  transfers or the initial squad, update `players` (id, name, purchase_price),
+  `bank`, `free_transfers`, `chips_available`, and `entry_id` once known. This
+  file is the only record of which chips are spent.
+- `signals/*.yaml` — research findings, schema above.
 - `memory/learnings.md` — three tiers: VALIDATED (tested on historical data, may
-  drive config changes) / OBSERVED FACTS / HYPOTHESES (never act on these).
-  New lessons enter as hypotheses; promote only after eval-suite evidence.
-- `memory/predictions/` — auto-saved; scored automatically once a gameweek's
-  points are final (09:00 UK the morning after its last match). A deferral is
-  retried on later runs, so an unscored gameweek needs no intervention.
+  drive config changes) / OBSERVED FACTS / HYPOTHESES (never act on these). New
+  lessons enter as hypotheses and are promoted only with eval-suite evidence.
+  **Every entry needs a date; VALIDATED entries need an evidence pointer.** The
+  pipeline checks this and flags violations in the report — tiers are capped, so
+  at the cap prune or promote rather than appending.
+- `memory/research/<date>-<slug>.md` — dated notes with sources and trust calls.
+
+**Maintained for you** (never hand-edit): `state.json`, `decisions.jsonl`,
+`runs.jsonl`, `predictions/`, `calibration.jsonl`, `signal_log.jsonl`,
+`signal_scores.jsonl`, `digest.json`, `current-context.md`. Predictions are
+scored once a gameweek's points are final, and **your minutes claims are scored
+too** — the context file shows the hit rate and which of your sources keeps being
+wrong. Expired signals are auto-archived to `signals/archive/`, snapshots older
+than two weeks are pruned (deadline days kept for audit), and logs rotate at 30
+days. You do not manage any of that.
 
 ## Reference material
 

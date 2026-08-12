@@ -9,6 +9,11 @@ import pandas as pd
 from . import config
 
 
+def digest_path_hint() -> str:
+    """Where the compact operating context lives, relative to the repo root."""
+    return "memory/current-context.md"
+
+
 def _players_line(df: pd.DataFrame) -> str:
     return ", ".join(
         f"{r.web_name} ({r.team_short} {r.position} £{r.price}m)"
@@ -194,6 +199,30 @@ def _render_md(ctx: dict) -> str:
         lines += ["", "## Uncertainty flags"]
         for u in unc:
             lines.append(f"- {u}")
+
+    # 4c. season so far — the compacted memory this run hands forward
+    dg = ctx.get("digest")
+    if dg:
+        cal, ra, tr, ch = (dg["model_calibration"], dg["research_accuracy"],
+                           dg["trajectory"], dg["chips"])
+        lines += ["", "## Season so far",
+                  f"- Full operating context: `{digest_path_hint()}`"]
+        if tr.get("available"):
+            lines.append(f"- [DATA] {tr['total_points']} pts, overall rank "
+                         f"{tr['overall_rank']} (last GW {tr['gw_points']})")
+        if cal["recent_mae"]:
+            trend = cal["mae_trend"]
+            lines.append("- [MODEL] calibration MAE " + ", ".join(
+                f"GW{c['gw']} {c['mae_all']}" for c in cal["recent_mae"])
+                + ("" if trend is None else
+                   f" ({'improving' if trend < 0 else 'worsening'} {abs(trend):.2f})"))
+        if ra.get("accuracy") is not None:
+            lines.append(f"- [SIGNAL] research accuracy {ra['accuracy']:.0%} "
+                         f"({ra['hits']}/{ra['hits'] + ra['misses']} minutes claims "
+                         f"over {ra['gws_scored']} GWs)")
+        if ch["first_half_expiring"]:
+            lines.append("- [DATA] expiring at the split: "
+                         + "; ".join(ch["first_half_expiring"]))
 
     # 5. long-term outlook / 6. monitor
     lines += ["", "## Long-term outlook"]
