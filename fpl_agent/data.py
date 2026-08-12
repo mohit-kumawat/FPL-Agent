@@ -237,15 +237,17 @@ def detect_changes(today_boot: dict, prev_boot: dict | None) -> dict:
             continue
         if p["now_cost"] != old["now_cost"]:
             changes["price_changes"].append({
-                "player": label, "from": old["now_cost"] / 10, "to": p["now_cost"] / 10,
+                "id": pid, "player": label,
+                "from": old["now_cost"] / 10, "to": p["now_cost"] / 10,
             })
         if p["status"] != old["status"]:
             changes["status_changes"].append({
-                "player": label, "from": old["status"], "to": p["status"],
+                "id": pid, "player": label, "from": old["status"], "to": p["status"],
                 "news": p.get("news", ""),
             })
         if (p.get("news") or "") != (old.get("news") or ""):
-            changes["news_changes"].append({"player": label, "news": p.get("news", "")})
+            changes["news_changes"].append({"id": pid, "player": label,
+                                            "news": p.get("news", "")})
     for pid, p in prev_players.items():
         if pid not in cur_players:
             changes["removed_players"].append(p["web_name"])

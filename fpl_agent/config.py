@@ -73,6 +73,31 @@ VAASTAV_TEAMS = (
 PRIOR_SEASON = "2025-26"
 CURRENT_SEASON = "2026-27"
 
+# ------------------------------------------------------- scoring regimes
+# Seasons in the same generation score points under the same rules. Prior-season
+# PPG carried across a boundary embeds points earned under rules that no longer
+# apply (a defender's DC points, a keeper's old bonus profile), while process
+# stats (xG, xA, xGC) are rule-independent. Tier P shifts weight accordingly.
+RULES_VERSION = {
+    "2021-22": 1, "2022-23": 1, "2023-24": 1, "2024-25": 1,
+    "2025-26": 2,   # defensive contributions added, GK goal = 10, assist changes
+    "2026-27": 3,   # BPS rework
+}
+# Weight on realized PPG (vs the process-stat ridge) inside the Tier P prior.
+PPG_PRIOR_WEIGHT = 0.5              # same regime — validated on the 2024/25 replay
+# Cross-regime pick is conservative and CANNOT be validated before GW1 of the
+# new rules; revisit once the ablation ladder can measure it (roadmap item 1).
+PPG_PRIOR_WEIGHT_CROSS_REGIME = 0.35
+
+
+def rules_cross_regime(prior_season: str, current_season: str) -> bool:
+    """True when scoring rules changed between the two seasons. A season missing
+    from RULES_VERSION counts as a change — downweighting an unknown regime is
+    the safe failure."""
+    a, b = RULES_VERSION.get(prior_season), RULES_VERSION.get(current_season)
+    return a is None or b is None or a != b
+
+
 # ------------------------------------------------------------- model config
 HORIZON_GWS = 5             # expected-points horizon for planning
 FORM_WINDOW = 5             # rolling window for recency model

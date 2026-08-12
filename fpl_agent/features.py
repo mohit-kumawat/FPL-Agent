@@ -127,6 +127,11 @@ def enrich_players(players: pd.DataFrame, boot: dict, fixtures: list[dict],
 
     gws_played = sum(1 for e in boot["events"] if e["finished"])
     df["gws_played"] = gws_played
+    # Preseason the bootstrap aggregates are still last season's numbers; once
+    # GW1 is processed they reset to current-season. Mark the prior-season data
+    # when it crosses a scoring-regime boundary so Tier P downweights its PPG.
+    df["prior_rules_cross"] = gws_played == 0 and config.rules_cross_regime(
+        config.PRIOR_SEASON, config.CURRENT_SEASON)
 
     if panel is not None and not panel.empty:
         recent = (

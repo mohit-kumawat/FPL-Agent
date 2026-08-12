@@ -28,10 +28,12 @@ def decide_work(changes: dict, boot: dict, squad: dict, has_signals: bool) -> di
     squad_ids = [p["id"] for p in (squad.get("players") or [])]
 
     def touches_squad(items: list[dict]) -> bool:
-        return any(
-            any(str(pid) in str(i) or i.get("player", "") for pid in squad_ids)
-            for i in items
-        ) if squad_ids else bool(items)
+        # match by element id — the previous string-contains heuristic was
+        # truthy for ANY item with a player label, so every news day retrained
+        if not squad_ids:
+            return bool(items)
+        sq = set(squad_ids)
+        return any(i.get("id") in sq for i in items)
 
     triggers: list[str] = []
     work = {"models": False, "optimizer": False, "full_retrain": False,
@@ -59,7 +61,14 @@ def decide_work(changes: dict, boot: dict, squad: dict, has_signals: bool) -> di
         if hrs <= 24:
             work["final_check"] = True
     if changes["price_changes"] and not work["models"]:
-        triggers.append("price changes only — squad value updated, no model rerun")
+        if touches_squad(changes["price_changes"]):
+            # a rise/fall on an owned player moves selling prices and
+            # affordability, which can flip a marginal transfer plan
+            triggers.append("price change on owned player — selling prices moved, "
+                            "rerun optimizer")
+            work.update(models=True, optimizer=True)
+        else:
+            triggers.append("price changes only — squad value updated, no model rerun")
     if not triggers:
         triggers.append("quiet day — no changes, deadline far")
     return work

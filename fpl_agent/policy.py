@@ -132,16 +132,33 @@ def assess_captain(xi_result: dict, players: pd.DataFrame) -> dict:
 
 def uncertainty_flags(ep: pd.DataFrame, chosen_ids: list[int],
                       signal_ids: set[int], gws_played: int) -> list[str]:
-    """Cold-start discipline: expensive players without data need a signal."""
+    """Cold-start discipline: players without data need a signal, and a
+    scoring-rules change makes every prior-season number softer."""
     flags: list[str] = []
     if gws_played >= 3:
         return flags
     mine = ep[ep["id"].isin(chosen_ids)]
+
+    if "prior_rules_cross" in ep.columns and bool(ep["prior_rules_cross"].any()):
+        flags.append("[MODEL] scoring rules changed since last season — prior-season "
+                     "PPG is downweighted (process stats lead); treat close EP "
+                     "comparisons as ties until real GWs accumulate")
+
     risky = mine[(mine["price"] >= 7.0) & (mine["minutes"] < 900)]
     for r in risky.itertuples():
         if int(r.id) not in signal_ids:
             flags.append(f"[MODEL] {r.web_name} (£{r.price}m) has <1 season of data and "
                          "NO signal — research before trusting this pick")
+
+    # new signings / promoted-team players at any price: no meaningful league
+    # sample, so their EP is a price prior wearing a number
+    fresh = mine[(mine["price"] < 7.0) & (mine["minutes"] < 450)]
+    for r in fresh.itertuples():
+        if int(r.id) not in signal_ids:
+            flags.append(f"[MODEL] {r.web_name} (£{r.price}m) has almost no league "
+                         "history (new signing / promoted) — EP is a price prior; "
+                         "a minutes signal would firm this up")
+
     thin = mine[mine["xmins"].between(0.45, 0.7)]
     for r in thin.itertuples():
         flags.append(f"[MODEL] {r.web_name} xmins {r.xmins:.2f} — rotation-zone minutes")

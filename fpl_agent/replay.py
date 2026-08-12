@@ -165,6 +165,10 @@ def snapshot_at(season: str, gw: int, horizon: int = config.HORIZON_GWS) -> pd.D
     snap["selected_by_percent"] = 0.0
     snap["sp_bonus"] = 0.0
     snap["gws_played"] = gws_played
+    # prior aggregates feed Tier P until COLD_START_GWS; mark them when they
+    # cross a scoring-regime boundary (same contract as features.enrich_players)
+    snap["prior_rules_cross"] = (gws_played < config.COLD_START_GWS
+                                 and config.rules_cross_regime(prior_season, season))
 
     fmults = _team_fdr_mult(season, gw, horizon)
     for col in fmults.columns:

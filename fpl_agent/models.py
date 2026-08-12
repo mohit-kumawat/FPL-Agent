@@ -93,8 +93,13 @@ def prior_baseline(df: pd.DataFrame) -> pd.Series:
             scaler.transform(X_all.loc[pos_mask, _RIDGE_FEATURES])
         )
 
-    # 50/50 realized vs process (regresses hot/cold outcomes to underlying stats)
-    prior = 0.5 * ppg + 0.5 * ridge_pred.fillna(ppg)
+    # realized vs process blend (regresses hot/cold outcomes to underlying
+    # stats). Across a scoring-regime change the realized PPG embeds points
+    # earned under rules that no longer apply, so weight shifts to process
+    # stats; callers mark provenance via the prior_rules_cross column.
+    cross = bool(df["prior_rules_cross"].any()) if "prior_rules_cross" in df.columns else False
+    w_ppg = config.PPG_PRIOR_WEIGHT_CROSS_REGIME if cross else config.PPG_PRIOR_WEIGHT
+    prior = w_ppg * ppg + (1 - w_ppg) * ridge_pred.fillna(ppg)
 
     # fallback tier: position x price bucket median for players without history
     df2 = df.assign(_prior=prior)
