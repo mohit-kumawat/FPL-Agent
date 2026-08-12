@@ -16,7 +16,7 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from fpl_agent import backtest, config, memoryio, optimizer, policy, replay  # noqa: E402
+from fpl_agent import backtest, config, memoryio, optimizer, policy, replay, scoring  # noqa: E402
 
 OUT: list[str] = []
 
@@ -26,23 +26,20 @@ def log(s: str = "") -> None:
     OUT.append(s)
 
 
-def xi_actual(squad_ep: pd.DataFrame, act: pd.Series) -> float:
-    """Actual points of the model-picked XI + doubled captain (no autosubs —
-    identical treatment for every strategy, so comparisons stay fair)."""
-    xi = optimizer.pick_xi(squad_ep)
-    pts = float(xi["xi"]["id"].map(act).fillna(0).sum())
-    pts += float(act.get(int(xi["captain"]["id"]), 0))
-    return pts
-
-
 def simulate(season: str, max_gw: int = 38, transfers: bool = True) -> dict:
-    """Run one season. transfers=False -> hold the GW1 squad all season."""
+    """Run one season. transfers=False -> hold the GW1 squad all season.
+
+    Scores every GW two ways: `raw` (XI + doubled captain, the historically
+    published number) and `autosub` (real matchday rules: automatic subs +
+    vice-captain fallback, via fpl_agent.scoring)."""
     b = replay.build_at(season, 1)
     squad_ids = list(b["squad"]["id"])
     purchase = dict(zip(b["squad"]["id"], b["squad"]["price"]))
     bank = round(config.BUDGET - b["cost"], 1)
     fts, hits, moves = 1, 0, 0
     total = 0.0
+    total_autosub = 0.0
+    n_subs, n_vice = 0, 0
     weekly: list[float] = []
 
     for gw in range(1, max_gw + 1):
@@ -83,12 +80,24 @@ def simulate(season: str, max_gw: int = 38, transfers: bool = True) -> dict:
                 fts = min(5, fts + 1)
             mine = ep[ep["id"].isin(squad_ids)]
 
-        pts = xi_actual(mine, act) if len(mine) == config.SQUAD_SIZE else 0.0
+        if len(mine) == config.SQUAD_SIZE:
+            xi = optimizer.pick_xi(mine)
+            mins = replay.actual_minutes(season, gw)
+            s = scoring.gw_score(xi, mins, act)
+            pts, pts_sub = s["raw"], s["autosub"]
+            n_subs += s["subs"]
+            n_vice += s["vice_used"]
+        else:
+            pts = pts_sub = 0.0
         weekly.append(pts)
         total += pts
+        total_autosub += pts_sub
 
     return {"total": round(total - hits), "raw": round(total), "hits": hits,
-            "moves": moves, "weekly_mean": round(total / max_gw, 1)}
+            "moves": moves, "weekly_mean": round(total / max_gw, 1),
+            "autosub_total": round(total_autosub - hits),
+            "autosub_gain": round(total_autosub - total),
+            "n_subs": n_subs, "n_vice": n_vice}
 
 
 def main() -> None:
@@ -102,10 +111,15 @@ def main() -> None:
         log(f"- **agent strategy**: {full['total']} pts "
             f"({full['moves']} transfers, {full['hits']} hit pts, "
             f"{full['weekly_mean']} raw pts/GW)")
-        log(f"- hold-GW1-squad baseline: {hold['total']} pts")
-        log(f"- transfer engine added: {full['total'] - hold['total']:+d} pts")
-        log("- note: no chips, no autosubs (same handicap for both arms); real "
-            "managers gain ~30-60 pts/season from chips on top")
+        log(f"- **with real matchday rules (autosubs + vice)**: "
+            f"{full['autosub_total']} pts ({full['autosub_gain']:+d} from "
+            f"{full['n_subs']} autosubs, vice used {full['n_vice']}x)")
+        log(f"- hold-GW1-squad baseline: {hold['total']} pts "
+            f"(autosub-aware {hold['autosub_total']})")
+        log(f"- transfer engine added: {full['total'] - hold['total']:+d} pts "
+            f"(autosub-aware {full['autosub_total'] - hold['autosub_total']:+d})")
+        log("- note: no chips in either arm; real managers gain ~30-60 "
+            "pts/season from chips on top")
         log("")
 
     log("## Lambda-grid robustness (Model A recency vs Model B ridge)")

@@ -21,7 +21,7 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from fpl_agent import config, data, memoryio, optimizer, policy, replay  # noqa: E402
+from fpl_agent import config, data, memoryio, optimizer, policy, replay, scoring  # noqa: E402
 
 OUT: list[str] = []
 SEED = 20260812
@@ -112,12 +112,6 @@ def leak_audit(season: str, gws: int = GWS) -> list[dict]:
 
 
 # ----------------------------------------------------------------- phase 1
-def xi_actual(squad_ep: pd.DataFrame, act: pd.Series) -> float:
-    xi = optimizer.pick_xi(squad_ep)
-    pts = float(xi["xi"]["id"].map(act).fillna(0).sum())
-    return pts + float(act.get(int(xi["captain"]["id"]), 0))
-
-
 def run_arm(season: str, max_gw: int = GWS, transfers: bool = True) -> dict:
     """The pipeline arm: identical code path to eval/strategy_sim, per-GW output."""
     b = replay.build_at(season, 1)
@@ -125,7 +119,7 @@ def run_arm(season: str, max_gw: int = GWS, transfers: bool = True) -> dict:
     purchase = dict(zip(b["squad"]["id"], b["squad"]["price"]))
     bank = round(config.BUDGET - b["cost"], 1)
     fts, hits, moves = 1, 0, 0
-    weekly, ceiling = [], []
+    weekly, weekly_sub, ceiling = [], [], []
 
     for gw in range(1, max_gw + 1):
         ep = replay.expected_points_at(season, gw)
@@ -157,11 +151,19 @@ def run_arm(season: str, max_gw: int = GWS, transfers: bool = True) -> dict:
                 fts = min(config.MAX_FREE_TRANSFERS, fts + 1)
             mine = ep[ep["id"].isin(squad_ids)]
 
-        weekly.append(xi_actual(mine, act) if len(mine) == config.SQUAD_SIZE else 0.0)
+        if len(mine) == config.SQUAD_SIZE:
+            s = scoring.gw_score(optimizer.pick_xi(mine),
+                                 replay.actual_minutes(season, gw), act)
+            weekly.append(s["raw"])
+            weekly_sub.append(s["autosub"])
+        else:
+            weekly.append(0.0)
+            weekly_sub.append(0.0)
         ceiling.append(best_xi_from(mine, act))
 
     return {"total": round(sum(weekly) - hits), "raw": round(sum(weekly)),
             "hits": hits, "moves": moves, "weekly": [round(w) for w in weekly],
+            "autosub_total": round(sum(weekly_sub) - hits),
             "ceiling": round(sum(ceiling))}
 
 
@@ -307,8 +309,10 @@ def main() -> None:
         log(f"| arm | GW1-10 total | detail |")
         log(f"|---|---|---|")
         log(f"| pipeline (transfers) | **{agent['total']}** | {agent['moves']} moves, "
-            f"{agent['hits']} hit pts, raw {agent['raw']} |")
-        log(f"| pipeline (hold GW1) | {hold['total']} | no transfers |")
+            f"{agent['hits']} hit pts, raw {agent['raw']}, "
+            f"autosub-aware {agent['autosub_total']} |")
+        log(f"| pipeline (hold GW1) | {hold['total']} | no transfers, "
+            f"autosub-aware {hold['autosub_total']} |")
         log(f"| template (most-owned XI) | {tmpl['total']} | crowd benchmark |")
         log(f"| random legal squad | {rnd['mean']} | null: p50 {rnd['p50']}, p90 {rnd['p90']}, n={rnd['n']} |")
         log(f"| ceiling (perfect XI from held squad) | {agent['ceiling']} | selection upper bound |")

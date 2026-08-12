@@ -177,6 +177,13 @@ def run_daily(force: bool = False) -> dict:
                 }
                 ctx["uncertainty"] = policy.uncertainty_flags(
                     ep, squad_ids, signal_ids, gws_played)
+                p = decision.get("plan")
+                acted = p is not None and p.get("n_transfers", 0) > 0
+                ctx["findings"].extend(policy.price_timing_notes(
+                    ep,
+                    in_ids=[int(x) for x in p["in"]["id"]] if acted else [],
+                    out_ids=[int(x) for x in p["out"]["id"]] if acted else [],
+                    owned_ids=squad_ids))
             else:
                 build = optimizer.build_squad(ep)
                 xi = optimizer.pick_xi(build["squad"])
@@ -188,6 +195,9 @@ def run_daily(force: bool = False) -> dict:
                 }
                 ctx["uncertainty"] = policy.uncertainty_flags(
                     ep, list(build["squad"]["id"]), signal_ids, gws_played)
+                ctx["findings"].extend(policy.price_timing_notes(
+                    ep, in_ids=[int(x) for x in build["squad"]["id"]],
+                    out_ids=[], owned_ids=[]))
 
     # persist memory
     state["signals_seen"] = sorted(n["file"] for n in signal_notes)

@@ -342,6 +342,7 @@ def players_frame(boot: dict) -> pd.DataFrame:
         "form", "points_per_game", "selected_by_percent", "ict_index",
         "expected_goals", "expected_assists", "expected_goal_involvements",
         "expected_goals_conceded", "ep_next", "ep_this", "value_season",
+        "price_change_percent",
     ]
     for c in num_cols:
         if c in df.columns:

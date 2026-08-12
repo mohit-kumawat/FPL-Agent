@@ -104,11 +104,128 @@ def verify() -> None:
     sys.exit(1 if bad else 0)
 
 
+RESULTS = Path(__file__).with_name("phase3-results.jsonl")
+
+
+def _gw_actuals(gw: int) -> tuple[dict[str, float], dict[str, float]] | None:
+    """(points, minutes) by web_name for a finished GW of the current season.
+
+    Uses the pipeline's own panel cache (element-summary history) plus the
+    latest bootstrap for the id -> web_name mapping. Returns None while the
+    GW is not finished or the panel does not carry it yet.
+    """
+    from fpl_agent import data  # deferred: lock/verify must not need pandas
+
+    boot = data.load_snapshot("bootstrap") or data.fetch_bootstrap()
+    ev = next((e for e in boot["events"] if e["id"] == gw), None)
+    if not ev or not ev.get("finished"):
+        return None
+    panel = data.build_current_panel(boot)
+    if panel.empty or panel["round"].max() < gw:
+        return None
+    g = panel[panel["round"] == gw].groupby("element")[["total_points", "minutes"]].sum()
+    names: dict[int, str] = {}
+    dupes: set[str] = set()
+    for el in boot["elements"]:
+        if el["web_name"] in names.values():
+            dupes.add(el["web_name"])
+        names[el["id"]] = el["web_name"]
+    pts: dict[str, float] = {}
+    mins: dict[str, float] = {}
+    for pid, row in g.iterrows():
+        n = names.get(int(pid))
+        if n is None or n in dupes:      # ambiguous names cannot be scored
+            continue
+        pts[n] = float(row["total_points"])
+        mins[n] = float(row["minutes"])
+    return pts, mins
+
+
+def _score_entry(payload: dict, pts: dict[str, float],
+                 mins: dict[str, float]) -> dict:
+    """Component scores for one sealed recommendation. Names, not ids, because
+    that is what the sealed report carries."""
+    out: dict = {"gw": payload.get("gw"), "window": payload.get("window"),
+                 "locked_at_utc": payload.get("locked_at_utc")}
+
+    cap = (payload.get("captain") or {}).get("pick")
+    xi = (payload.get("xi") or {}).get("players") or []
+    if cap:
+        out["captain"] = cap
+        out["captain_actual"] = pts.get(cap)
+        out["captain_played"] = bool(mins.get(cap, 0) > 0)
+    if xi:
+        known = [p for p in xi if p in pts]
+        out["xi_actual_sum"] = round(sum(pts[p] for p in known), 1)
+        out["xi_players_scored"] = f"{len(known)}/{len(xi)}"
+        if cap and known:
+            out["captain_ceiling_in_xi"] = max(pts[p] for p in known)
+
+    dec = payload.get("decision") or {}
+    if dec.get("action") and dec["action"] not in ("hold", "initial_squad_proposal"):
+        ins = [p for p in dec.get("in", []) if p in pts]
+        outs = [p for p in dec.get("out", []) if p in pts]
+        if ins or outs:
+            out["transfer_gw_delta"] = round(
+                sum(pts[p] for p in ins) - sum(pts[p] for p in outs), 1)
+    out["action"] = dec.get("action")
+    return out
+
+
 def score() -> None:
-    print("scoring is NOT implemented yet.")
-    print("When the gameweeks resolve, score each locked entry's decision/captain/xi")
-    print("against actuals with the benchmark arms from eval/agent_backtest.py.")
-    sys.exit(2)
+    """Score every intact locked prediction whose GW has finished.
+
+    Appends to phase3-results.jsonl (skipping entries already scored) and
+    prints a table. Never touches the predictions ledger.
+    """
+    if not LEDGER.exists():
+        print("no predictions locked yet")
+        sys.exit(0)
+
+    done: set[str] = set()
+    if RESULTS.exists():
+        for line in RESULTS.read_text().splitlines():
+            try:
+                done.add(json.loads(line)["prediction_sha256"])
+            except (json.JSONDecodeError, KeyError):
+                continue
+
+    actuals: dict[int, tuple | None] = {}
+    scored = skipped = 0
+    for line in LEDGER.read_text().splitlines():
+        e = json.loads(line)
+        payload = e["payload"]
+        if digest(payload) != e["sha256"]:
+            print(f"TAMPERED entry (locked {payload.get('locked_at_utc')}) — not scored")
+            continue
+        if e["sha256"] in done:
+            continue
+        gw = payload.get("gw")
+        if not gw:
+            skipped += 1
+            continue
+        if gw not in actuals:
+            actuals[gw] = _gw_actuals(int(gw))
+        if actuals[gw] is None:
+            skipped += 1
+            continue
+        result = _score_entry(payload, *actuals[gw])
+        result["prediction_sha256"] = e["sha256"]
+        result["scored_at_utc"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with RESULTS.open("a") as fh:
+            fh.write(json.dumps(result) + "\n")
+        scored += 1
+        cap = result.get("captain")
+        cap_s = (f"captain {cap} -> {result.get('captain_actual')} "
+                 f"(ceiling {result.get('captain_ceiling_in_xi')})" if cap else "no captain")
+        print(f"  GW{gw} {result['window']}: {cap_s}; "
+              f"XI {result.get('xi_actual_sum')} "
+              f"[{result.get('xi_players_scored', '-')}]"
+              + (f"; transfer Δ {result['transfer_gw_delta']:+.1f}"
+                 if "transfer_gw_delta" in result else ""))
+
+    print(f"{scored} scored, {skipped} waiting (GW unfinished or no gw recorded)"
+          + (f"; results -> {RESULTS.name}" if scored else ""))
 
 
 if __name__ == "__main__":

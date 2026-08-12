@@ -126,3 +126,12 @@ W_COMPONENT = 0.55          # weight on component-based EP vs realized-PPG path
 # Optimizer defaults
 BENCH_WEIGHT = 0.15         # bench players contribute this fraction of EP in squad objective
 MIN_PRICE_GK = 4.0
+
+# --------------------------------------------------------- price-change timing
+# bootstrap's price_change_percent: signed progress toward tonight's change
+# (positive -> rise, negative -> fall; observed all-zero preseason). Values are
+# advisory — the field's exact internals are FPL's — so thresholds are set
+# where being wrong is cheap: an "act tonight" nudge on a transfer the model
+# already wants, never a transfer the model didn't ask for.
+PRICE_MOVE_IMMINENT = 90.0   # |pct| >= this: treat tonight's move as likely
+PRICE_MOVE_WATCH = 60.0      # |pct| >= this: mention the momentum, no urgency

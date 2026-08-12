@@ -2,19 +2,17 @@
 
 ## 2024-25
 - **agent strategy**: 2232 pts (48 transfers, 52 hit pts, 60.1 raw pts/GW)
-- hold-GW1-squad baseline: 1884 pts
-- transfer engine added: +348 pts
-- reference: winner ~2,810 | top-10k ~2,450 | overall average ~2,100
+- **with real matchday rules (autosubs + vice)**: 2288 pts (+56 from 18 autosubs, vice used 0x)
+- hold-GW1-squad baseline: 1884 pts (autosub-aware 1901)
+- transfer engine added: +348 pts (autosub-aware +387)
+- note: no chips in either arm; real managers gain ~30-60 pts/season from chips on top
 
 ## 2023-24
 - **agent strategy**: 2267 pts (54 transfers, 68 hit pts, 61.4 raw pts/GW)
-- hold-GW1-squad baseline: 1939 pts
-- transfer engine added: +328 pts
-- reference: winner ~2,799 | overall average ~2,030
-- note (both seasons): no chips, no autosubs in either arm; chips typically add 30-60 pts
-- these figures were re-run after the selling-price fix (losses are now taken in
-  full, as FPL does) and the transfer-plan selection fix. Prior published numbers
-  (2,284 / 2,195) were computed under an inflated budget and are superseded.
+- **with real matchday rules (autosubs + vice)**: 2366 pts (+99 from 25 autosubs, vice used 1x)
+- hold-GW1-squad baseline: 1939 pts (autosub-aware 1972)
+- transfer engine added: +328 pts (autosub-aware +394)
+- note: no chips in either arm; real managers gain ~30-60 pts/season from chips on top
 
 ## Lambda-grid robustness (Model A recency vs Model B ridge)
 

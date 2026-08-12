@@ -198,6 +198,12 @@ def actual_points(season: str, gw: int) -> pd.Series:
     return df[df["round"] == gw].groupby("element")["total_points"].sum()
 
 
+def actual_minutes(season: str, gw: int) -> pd.Series:
+    """GW minutes per element (a double GW sums both matches) — feeds autosubs."""
+    df = _season_gws(season)
+    return df[df["round"] == gw].groupby("element")["minutes"].sum()
+
+
 def actual_points_range(season: str, gw_from: int, gw_to: int) -> pd.Series:
     df = _season_gws(season)
     m = df[(df["round"] >= gw_from) & (df["round"] <= gw_to)]

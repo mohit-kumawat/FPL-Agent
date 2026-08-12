@@ -165,6 +165,61 @@ def uncertainty_flags(ep: pd.DataFrame, chosen_ids: list[int],
     return flags
 
 
+def price_timing_notes(players: pd.DataFrame, in_ids: list[int],
+                       out_ids: list[int], owned_ids: list[int]) -> list[str]:
+    """Move-tonight-vs-wait advice from FPL's price-change predictor.
+
+    Timing only, never selection: these notes attach urgency (or patience) to
+    transfers the model already recommends, and warn when owned value is about
+    to fall. Price changes land at 00:00 UK time (config.PRICE_CHANGE_TZ).
+    """
+    notes: list[str] = []
+    if "price_change_percent" not in players.columns:
+        return notes
+    p = players.set_index("id")
+    pct = pd.to_numeric(p["price_change_percent"], errors="coerce").fillna(0.0)
+
+    def row(pid: int) -> tuple[str, float] | None:
+        if pid not in p.index:
+            return None
+        return f"{p.loc[pid, 'web_name']} (£{p.loc[pid, 'price']}m)", float(pct.get(pid, 0.0))
+
+    for pid in in_ids:
+        r = row(pid)
+        if r is None:
+            continue
+        name, v = r
+        if v >= config.PRICE_MOVE_IMMINENT:
+            notes.append(f"[DATA] {name} is {v:.0f}% toward tonight's RISE — "
+                         "buying before 00:00 UK saves £0.1m")
+        elif v >= config.PRICE_MOVE_WATCH:
+            notes.append(f"[DATA] {name} has rise momentum ({v:.0f}%) — "
+                         "no urgency tonight, but do not sit on this for days")
+        elif v <= -config.PRICE_MOVE_IMMINENT:
+            notes.append(f"[DATA] {name} is {-v:.0f}% toward tonight's FALL — "
+                         "waiting past 00:00 UK buys £0.1m cheaper")
+
+    for pid in out_ids:
+        r = row(pid)
+        if r is None:
+            continue
+        name, v = r
+        if v <= -config.PRICE_MOVE_IMMINENT:
+            notes.append(f"[DATA] {name} is {-v:.0f}% toward tonight's FALL — "
+                         "selling before 00:00 UK protects the selling price")
+
+    at_risk = [pid for pid in owned_ids if pid not in set(out_ids)]
+    for pid in at_risk:
+        r = row(pid)
+        if r is None:
+            continue
+        name, v = r
+        if v <= -config.PRICE_MOVE_IMMINENT:
+            notes.append(f"[DATA] owned value at risk: {name} likely falls tonight "
+                         f"({-v:.0f}%) — no action forced, but selling later costs £0.1m")
+    return notes
+
+
 def chip_check(boot: dict, squad_ep: pd.DataFrame | None, chips_available: list[str]) -> list[str]:
     """Conservative chip advice: only flag structurally good windows."""
     notes = []
