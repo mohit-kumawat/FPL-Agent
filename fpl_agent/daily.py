@@ -10,8 +10,9 @@ from typing import Any
 
 import pandas as pd
 
-from . import (config, data, digest, features, lifecycle, memoryio, models,
-               optimizer, policy, rating, report, retention, simulate, verify)
+from . import (action_gate, approvals, config, data, digest, external, features,
+               lifecycle, memoryio, models, optimizer, policy, rating, report,
+               retention, simulate, verify)
 
 
 def _hours_to_deadline(boot: dict) -> float | None:
@@ -231,6 +232,15 @@ def run_daily(force: bool = False) -> dict:
                     ctx["findings"].append(
                         f"[SIGNAL] GW{gw_done} research: {sig['hits']} of "
                         f"{sig['hits'] + sig['misses']} minutes claims held")
+                # and was the CAPTAIN call right? Scored from the XI banked at
+                # decision time — the honest counterfactual, not hindsight.
+                names = dict(zip(ep["id"].astype(int), ep["web_name"]))
+                creg = memoryio.score_captaincy(gw_done, gw_panel, names)
+                if creg:
+                    ctx["findings"].append(
+                        f"[MODEL] GW{gw_done} captaincy: {creg['captain']} scored "
+                        f"{creg['captain_actual']:.0f}, XI ceiling "
+                        f"{creg['xi_ceiling']:.0f} (regret {creg['regret']})")
                 # mark scored either way: with no stored prediction (a gameweek
                 # from before this squad existed) there is nothing to retry
                 scored_gws.add(gw_done)
@@ -295,6 +305,13 @@ def run_daily(force: bool = False) -> dict:
                     ep, in_ids=[int(x) for x in build["squad"]["id"]],
                     out_ids=[], owned_ids=[]))
 
+        # the evidence gate: may this recommendation be ACTED on? The gate only
+        # labels — the model's numbers stay visible either way, because hiding
+        # a blocked proposal would also hide what is wrong with it.
+        if ctx["recommendation"] is not None:
+            ctx["gate"] = action_gate.evaluate(ctx, ep, squad, signal_adjust,
+                                               signal_notes)
+
     # persist memory. Only overwrite the targets when this run actually produced
     # a recommendation — a quiet day must not erase yesterday's.
     if ctx.get("recommendation"):
@@ -308,9 +325,32 @@ def run_daily(force: bool = False) -> dict:
     if ctx["recommendation"]:
         prev_dec = memoryio.last_decision()
         ctx["prev_decision"] = prev_dec
-        memoryio.log_decision(report.decision_summary(ctx))
+        summary = report.decision_summary(ctx)
+        memoryio.log_decision(summary)
+        # a recommendation is a PROPOSAL: one approvals event per distinct
+        # proposal, awaiting the owner's `fpl approve`
+        approvals.record_proposal(summary)
     memoryio.log_run({"kind": "daily", "triggers": work["triggers"],
                       "models_ran": ctx["models_ran"]})
+
+    # approvals lifecycle: reconcile an approved proposal against the official
+    # picks (best-effort network), then hand the current state to the report
+    approvals.try_reconcile(squad, boot)
+    ctx["approval"] = approvals.state()
+
+    # external data, SHADOW MODE: ingest + score against results; never blended
+    # into EP — the ledger is what a future promotion decision will read
+    ctx["shadow"] = external.run_shadow(boot, fixtures)
+    for rec_ in ctx["shadow"].get("scored", []):
+        ctx["findings"].append(
+            f"[SHADOW] {rec_['provider']} GW{rec_['gw']}: Brier {rec_['brier']}, "
+            f"log-loss {rec_['log_loss']} over {rec_['fixtures_scored']} fixtures "
+            "(shadow only — not used by the model)")
+    for note in ctx["shadow"].get("ingested", []):
+        if note.get("problems"):
+            ctx["findings"].append(
+                f"[SHADOW] ⚠ {note['file']} rejected: {'; '.join(note['problems'])} "
+                "(left in data/external/inbox/)")
 
     # learnings hygiene: warn, never block — an unpruned notebook becomes folklore
     for problem in memoryio.validate_learnings()[:5]:
@@ -326,7 +366,8 @@ def run_daily(force: bool = False) -> dict:
 
     # the handoff: compact everything this run learned into next run's context
     dg = digest.build(boot, fixtures, squad, state,
-                      freshness=refreshed.get("freshness"), verification=ver)
+                      freshness=refreshed.get("freshness"), verification=ver,
+                      gate=ctx.get("gate"))
     digest.write(dg)
     ctx["digest"] = dg
 

@@ -22,11 +22,14 @@ Compacted into the handoff rather than read directly.
 
 | File | Purpose |
 |---|---|
-| `decisions.jsonl` | Every recommendation |
+| `decisions.jsonl` | Every recommendation, with the decision-time XI and captain EP (the counterfactual regret is scored from) and its gate verdict |
 | `runs.jsonl` | What ran when, and which triggers fired |
 | `calibration.jsonl` | Per-GW model accuracy once points are final |
 | `signal_log.jsonl` | Which minutes claims a GW's advice rested on, with source attribution |
-| `signal_scores.jsonl` | Whether those claims held — the agent's own scorecard |
+| `signal_scores.jsonl` | Whether those claims held, overall and by claim type — the agent's own scorecard |
+| `decision_scores.jsonl` | Captain regret per finished GW, scored against the decision-time XI |
+| `approvals.jsonl` | The proposal lifecycle: proposed → approved/rejected/deferred → reconciled against official picks (`fpl approve`) |
+| `shadow_scores.jsonl` | External providers' Brier / log-loss vs results — shadow mode only, read by a future promotion decision |
 | `predictions/gwXX.csv` | Stored forecasts, scored after lockdown |
 
 **State — small and mutable.** `state.json` (stage, GW state, signals seen,
@@ -47,6 +50,7 @@ the two costs are disk and signal-to-noise. `fpl daily` enforces this every run
 | `signals/*.yaml` | expired files move to `signals/archive/` | expiry stopped them acting but not from emitting an "IGNORED" line into *every* future report |
 | `routine/logs/*.log` | keep 30 days (ledger kept) | full agent stdout per run |
 | `eval/phase3-predictions.jsonl` | brief sealed by hash + path, not embedded | the hash is what makes revision detectable; the copy was just bulk |
+| `data/external/` | inbox drained into hashed snapshots on ingest | third-party payloads are audit evidence for the shadow ledger; malformed files stay in the inbox for a human |
 
 Safe to delete by hand: anything under `data/snapshots/`, `reports/`,
 `routine/logs/`. Everything else is either regenerable or the audit trail.

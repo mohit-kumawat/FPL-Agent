@@ -35,7 +35,7 @@ and produces recommendations for a human to act on.
 |---|---|
 | Docs | This file (full reference) · [AGENT.md](AGENT.md) (agent runbook) · [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Evidence | [eval/2024-25-report.md](eval/2024-25-report.md) · [eval/strategy-sim-report.md](eval/strategy-sim-report.md) · [eval/ablation-report.md](eval/ablation-report.md) |
-| Tests | `uv run pytest -q` (159 offline tests) · `uv run python eval/run_backtests.py` (replay suite) |
+| Tests | `uv run pytest -q` (200 offline tests) · `uv run python eval/run_backtests.py` (replay suite) |
 | Licence | MIT |
 
 *The rest of this file is the complete technical reference: exactly what the code
@@ -64,22 +64,26 @@ Module map:
 
 | Module | Lines | Responsibility |
 |---|---|---|
-| `policy.py` | 395 | Decision thresholds, captaincy + strategy modes, chip EV, price timing, flags |
-| `data.py` | 365 | API client, snapshots, price-freshness logic, change detection, history loaders |
-| `models.py` | 345 | Minutes model + distribution (p_start/p_60/p_bench), prior tier, ensemble, component EP |
-| `memoryio.py` | 512 | State, decisions, predictions, signal roles/validation + scoring, learnings check |
+| `memoryio.py` | 662 | State, decisions, predictions, evidence-gated signals, claim + captaincy scoring, learnings check |
+| `policy.py` | 461 | Decision thresholds, captaincy + strategy modes, chip EV (evidence-ruled), price timing, flags |
+| `data.py` | 414 | API client, snapshots, price-freshness logic, change detection, history loaders |
+| `models.py` | 394 | Minutes model + distribution (p_start/p_60/p_bench), prior tier, ensemble, component EP |
+| `daily.py` | 377 | Orchestrator: verify → changes → triggers → policy → gate → digest |
+| `report.py` | 345 | Markdown + JSON report writer, decision gate + owner-decision sections |
+| `digest.py` | 269 | Season digest + the compact context handed to the next run |
 | `replay.py` | 268 | Point-in-time historical reconstruction with leakage assertions |
-| `report.py` | 286 | Markdown + JSON report writer |
-| `daily.py` | 336 | Orchestrator: verify → changes → triggers → policy → digest |
-| `optimizer.py` | 193 | Three PuLP integer programs (build / XI / transfers) |
+| `external.py` | 225 | Shadow-mode external data: hashed snapshots, Brier/log-loss ledger, never blended into EP |
 | `simulate.py` | 190 | Seeded Monte Carlo point distributions (haul/blank tails, captaincy) |
-| `digest.py` | 218 | Season digest + the compact context handed to the next run |
+| `optimizer.py` | 193 | Three PuLP integer programs (build / XI / transfers) |
+| `action_gate.py` | 192 | Evidence gate: qualified / blocked / owner-choice per recommendation |
+| `approvals.py` | 171 | Owner-approval ledger: proposed → decided → reconciled vs official picks |
+| `evidence.py` | 145 | Source tiers for signals and what each tier may establish |
 | `retention.py` | 143 | Snapshot pruning, expired-signal archiving, log rotation |
 | `features.py` | 160 | Fixture channels, set-piece flags, rolling form |
 | `lifecycle.py` | 160 | Gameweek stage machine and pending items |
-| `verify.py` | 140 | Pre-flight state verification (blocking) |
+| `verify.py` | 171 | Pre-flight state verification (blocking) |
 | `scoring.py` | 91 | Real matchday rules: autosubs + vice-captain fallback |
-| `cli.py`, `rating.py`, `backtest.py`, `config.py` | 389 | Entry points, squad grading, model backtest, constants |
+| `cli.py`, `rating.py`, `backtest.py`, `config.py` | 460 | Entry points, squad grading, model backtest, constants |
 
 ---
 
@@ -428,17 +432,57 @@ with repeats collapsed. That file is the agent's memory; the ledgers behind it
 (`calibration.jsonl`, `signal_log.jsonl`, `signal_scores.jsonl`,
 `decisions.jsonl`) are append-only evidence it does not have to read.
 
-Two feedback loops close automatically once a gameweek's points are final:
-predictions are scored into the calibration trend, and every minutes claim a
-signal made is checked against real minutes and attributed to its source file —
-so the agent finds out which of its own research keeps being wrong, which the
-model's accuracy never measured.
+Three feedback loops close automatically once a gameweek's points are final:
+predictions are scored into the calibration trend; every minutes claim a signal
+made is checked against real minutes and attributed to its source file *and
+claim type* — so the agent finds out which of its own research keeps being
+wrong, which the model's accuracy never measured; and the captain call is scored
+for regret against the decision-time XI banked in `decisions.jsonl` (the honest
+counterfactual, not hindsight).
 
 Retention is enforced in code and documented in
 [memory/README.md](memory/README.md): snapshots keep 14 days plus every deadline
 day (~790MB/season → ~130MB, audit trail intact), expired signals are archived so
 they stop emitting an "IGNORED" line into every future report, and logs rotate at
 30 days.
+
+### 8.2 Evidence, the decision gate, and owner approval
+
+A recommendation may be *acted on* only when built from verified official FPL
+data plus validated, attributable, current evidence. Three mechanisms enforce
+that (`evidence.py`, `action_gate.py`, `approvals.py`):
+
+**Evidence tiers on signals.** Every signal file names its evidence (tier, URL,
+publisher, published-at). Tier 1 (club/manager/league) may establish facts;
+tier 2 (named outlet) may set forecast bounds, and the hard availability roles
+(`ruled_out`, `expected_starter`) only with a second tier-2 source from a
+different domain; tier 3 — and any file whose evidence cannot be checked — is a
+watch item that moves nothing. Signal expiry is capped by the source's permitted
+lifetime (14/7/3 days by tier). Cross-file contradictions resolve to the higher
+tier; ties drop both bounds and the report asks for better evidence.
+
+**The action gate.** Every recommendation is labelled `qualified`, `blocked`,
+or `owner_choice` before it reaches the report, with the failed requirements
+and the exact research tasks that would unblock it. An unflagged API status is
+tier-0 availability evidence; a flagged player needs an applied signal floor.
+`owner_choice` exists deliberately: when acting lacks evidence AND holding
+carries unresolved risk, the gate enumerates both sides instead of falling
+silent. Chip EV follows the same rule — a default double-gameweek prior never
+fires a chip; play-now must be scenario-evidenced or dominant even against a
+certain future double. Gate verdicts are recorded in `decisions.jsonl`, so the
+abstention rate is itself a tracked metric.
+
+**Owner approval.** A recommendation is a proposal until `fpl approve` records
+the owner's decision in `memory/approvals.jsonl` (identical repeats collapse).
+Approved is still not executed: the pipeline reconciles approved actions
+against the official picks endpoint and only then marks them `reconciled`.
+Recommendations never mutate `squad.yaml`.
+
+**External data stays in shadow mode** (`external.py`): payloads dropped in
+`data/external/inbox/` are hashed, snapshotted, and scored (Brier, log-loss)
+against official results into `memory/shadow_scores.jsonl` — and are never
+blended into production EP. Promotion is a pre-registered human decision after
+at least 20 scored gameweeks.
 
 ## 9. Operating the agent
 
@@ -474,9 +518,10 @@ uv run fpl daily [--force]        # the daily loop
 uv run fpl build [--lock 411,426] [--budget 100]
 uv run fpl rate                   # grade squad.yaml against optimal
 uv run fpl pending [list|add <text>|done <substr>]
+uv run fpl approve [approved|rejected|deferred] [note]   # record owner decision
 uv run fpl backtest               # model A/B/ensemble, out-of-sample
 uv run fpl refresh                # force re-fetch
-uv run pytest -q                  # 159 offline tests, no network
+uv run pytest -q                  # 200 offline tests, no network
 uv run python eval/run_backtests.py    # point-in-time replay suite
 uv run python eval/strategy_sim.py     # full-season strategy return
 uv run python eval/ablation.py         # ablation ladder + bootstrap CIs

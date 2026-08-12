@@ -95,6 +95,28 @@ def test_split_expiry_is_quiet_early_and_loud_near_the_deadline():
     assert "use-it-or-lose-it" in digest.render(near)
 
 
+def test_expiry_warning_fires_on_the_last_playable_gameweek():
+    """Windows are inclusive (start <= gw <= stop), so GW19 IS the last chance —
+    the one gameweek the nag must not vanish."""
+    last = digest.build(_boot(next_gw=19), [], SQUAD, {})
+    assert last["chips"]["first_half_expiring"], "silent on the final chance"
+    assert "last chance" in digest.render(last)
+
+
+def test_unscored_pending_respects_state_scored_gws():
+    """A GW with no stored prediction is retired via state, never reaching
+    calibration.jsonl — it must not haunt the context as 'awaiting' forever."""
+    d = digest.build(_boot(next_gw=10, finished=9), [], SQUAD,
+                     {"scored_gws": list(range(1, 10))})
+    assert d["model_calibration"]["unscored_pending"] == []
+
+
+def test_awaiting_scoring_renders_gameweeks_not_a_python_list():
+    d = digest.build(_boot(next_gw=4, finished=3), [], SQUAD, {})
+    line = next(l for l in digest.render(d).splitlines() if "Awaiting" in l)
+    assert "GW1, GW2, GW3" in line and "[" not in line
+
+
 def test_blocked_verification_still_reaches_the_next_run():
     d = digest.build(_boot(), [], SQUAD, {},
                      verification={"blockers": ["squad.yaml has 14 players"],
@@ -152,6 +174,40 @@ def test_ep_only_signals_are_not_scored_as_minutes_claims():
     assert memoryio.score_signals(5, _panel({7: 90.0})) is None
 
 
+def test_a_revised_claim_supersedes_the_original_for_scoring():
+    """Rotation risk on Monday, ruled out at Friday's presser: the grade must
+    land on the claim the advice actually rested on, not the stale one."""
+    monday = pd.DataFrame({"xmins_min": [0.85], "xmins_max": [None],
+                           "ep_per_gw": [0.0], "sources": ["monday.yaml"]}, index=[7])
+    friday = pd.DataFrame({"xmins_min": [None], "xmins_max": [0.05],
+                           "ep_per_gw": [0.0], "sources": ["friday.yaml"]}, index=[7])
+    memoryio.log_applied_signals(5, monday)
+    memoryio.log_applied_signals(5, friday)
+    res = memoryio.score_signals(5, _panel({7: 0.0}))
+    assert res["claims"] == 1 and res["hits"] == 1 and res["misses"] == 0
+    assert res["by_source"] == {"friday.yaml": {"hit": 1, "miss": 0}}
+
+
+def test_double_gameweek_minutes_do_not_falsify_a_per_match_cap():
+    """120 of a possible 180 is UNDER a 0.70 rotation cap — two 60-minute
+    outings must not be graded against a single 90."""
+    frame = pd.DataFrame({"xmins_min": [None], "xmins_max": [0.70],
+                          "ep_per_gw": [0.0], "sources": ["press.yaml"]}, index=[7])
+    memoryio.log_applied_signals(5, frame)
+    dgw = pd.DataFrame([{"element": 7, "minutes": 60.0, "round": 5},
+                        {"element": 7, "minutes": 60.0, "round": 5}])
+    assert memoryio.score_signals(5, dgw)["hits"] == 1
+
+
+def test_a_source_with_no_misses_is_never_least_reliable():
+    frame = pd.DataFrame({"xmins_min": [0.85, 0.85], "xmins_max": [None, None],
+                          "ep_per_gw": [0.0, 0.0],
+                          "sources": ["gold.yaml", "gold.yaml"]}, index=[7, 8])
+    memoryio.log_applied_signals(5, frame)
+    memoryio.score_signals(5, _panel({7: 90.0, 8: 90.0}))
+    assert memoryio.signal_scorecard()["least_reliable"] == []
+
+
 def test_a_player_missing_from_the_panel_is_unscored_not_wrong():
     frame = pd.DataFrame({"xmins_min": [0.85], "xmins_max": [None],
                           "ep_per_gw": [0.0], "sources": ["a.yaml"]}, index=[7])
@@ -169,7 +225,10 @@ def test_expired_signals_stop_polluting_every_report():
             "date: 2026-08-01\nttl_days: 7\nadjustments:\n"
             f"  - player_id: {i}\n    role: expected_starter\n")
     (memoryio.SIGNALS_DIR / "live.yaml").write_text(
-        "date: 2026-11-30\nttl_days: 14\nadjustments:\n"
+        "date: 2026-11-30\nttl_days: 14\n"
+        "evidence:\n  tier: 1\n  url: https://club.com/news\n"
+        "  publisher: club\n  published_at: 2026-11-30T10:00:00Z\n"
+        "adjustments:\n"
         "  - player_id: 99\n    role: expected_starter\n")
 
     _, before = memoryio.load_signals(now=NOW)

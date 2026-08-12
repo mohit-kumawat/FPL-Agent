@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from . import config, data, memoryio, rules
+from . import approvals, config, data, memoryio, rules
 
 CONTEXT_FILE = config.MEMORY_DIR / "current-context.md"
 DIGEST_FILE = config.MEMORY_DIR / "digest.json"
@@ -64,10 +64,14 @@ def _chip_state(boot: dict, squad: dict) -> dict:
         if not wins:
             continue
         first_stop = wins[0][1]
-        near = 0 < first_stop - gw <= EXPIRY_WARN_GWS
+        # inclusive of first_stop itself: windows are start <= gw <= stop, so
+        # the split GW is the LAST chance — going quiet there loses the chip
+        left = first_stop - gw
+        near = 0 <= left <= EXPIRY_WARN_GWS
         if near and (f"{family}1" in held or family in held):
-            expiring.append(f"{rules.CHIP_LABELS[family]} "
-                            f"(by GW{first_stop}, {first_stop - gw} GWs left)")
+            expiring.append(f"{rules.CHIP_LABELS[family]} (by GW{first_stop}, "
+                            + ("THIS GW — last chance)" if left == 0
+                               else f"{left} GWs left)"))
     return {"held": held, "playable_now": playable,
             "first_half_expiring": expiring,
             "windows": {k: [list(w) for w in v] for k, v in windows.items()}}
@@ -91,7 +95,8 @@ def _season_trajectory(squad: dict) -> dict:
 
 
 def build(boot: dict, fixtures: list[dict], squad: dict, state: dict,
-         freshness: dict | None = None, verification: dict | None = None) -> dict:
+         freshness: dict | None = None, verification: dict | None = None,
+         gate: dict | None = None) -> dict:
     """Assemble the digest. Pure read — callers persist it with `write`."""
     nxt = next((e for e in boot.get("events", []) if e.get("is_next")), None)
     cur = next((e for e in boot.get("events", []) if e.get("is_current")), None)
@@ -120,14 +125,24 @@ def build(boot: dict, fixtures: list[dict], squad: dict, state: dict,
             "recent_mae": [{"gw": c["gw"], "mae_all": c["mae_all"]} for c in cal],
             "mae_trend": (round(maes[-1] - maes[0], 2)
                           if len(maes) >= 2 else None),
+            # subtract state's scored_gws too: a GW with no stored prediction
+            # is retired there without ever reaching calibration.jsonl, and
+            # must not haunt the context as "awaiting" for the rest of the season
             "unscored_pending": sorted(
                 set(range(1, (nxt["id"] if nxt else 1)))
                 - {c["gw"] for c in memoryio.calibration_history(50)}
+                - {int(g) for g in (state.get("scored_gws") or [])}
             )[:5],
         },
         "research_accuracy": memoryio.signal_scorecard(),
+        "decision_quality": memoryio.decision_quality(),
         "recent_decisions": _compact_decisions(
             memoryio.recent_decisions(DECISION_HISTORY * 4))[-DECISION_HISTORY:],
+        "gate": ({"status": gate["status"], "action_type": gate["action_type"],
+                  "failed": gate["failed_requirements"][:3],
+                  "next_research": gate["next_research"][:3]}
+                 if gate else None),
+        "approval": approvals.state(),
         "open_items": [p.get("text") for p in (state.get("pending_snapshot") or [])],
         "data_freshness": {
             "fetched_at": (freshness or {}).get("fetched_at"),
@@ -172,13 +187,18 @@ def render(d: dict) -> str:
                  + ", ".join(f"GW{c['gw']} {c['mae_all']}" for c in cal["recent_mae"])
                  + arrow)
     if cal["unscored_pending"]:
-        L.append(f"- **Awaiting scoring**: GW{cal['unscored_pending']} "
-                 "(deferred until points are final — expected, not a fault)")
+        L.append("- **Awaiting scoring**: "
+                 + ", ".join(f"GW{g}" for g in cal["unscored_pending"])
+                 + " (deferred until points are final — expected, not a fault)")
 
     if ra.get("accuracy") is not None:
         line = (f"- **Your research accuracy**: {ra['accuracy']:.0%} "
                 f"({ra['hits']} right / {ra['misses']} wrong minutes claims over "
                 f"{ra['gws_scored']} GWs)")
+        if ra.get("by_type"):
+            line += " | by type: " + ", ".join(
+                f"{t} {a['hit']}/{a['hit'] + a['miss']}"
+                for t, a in sorted(ra["by_type"].items()))
         if ra.get("least_reliable"):
             line += " — least reliable: " + ", ".join(
                 f"{s['source']} ({s['hit']}/{s['hit'] + s['miss']})"
@@ -186,6 +206,33 @@ def render(d: dict) -> str:
         L.append(line)
     else:
         L.append("- **Your research accuracy**: no scored minutes claims yet")
+
+    dq = d.get("decision_quality") or {}
+    if any(dq.get(k) for k in ("qualified", "owner_choice", "blocked")):
+        line = (f"- **Gate record**: {dq['qualified']} qualified / "
+                f"{dq['owner_choice']} owner-choice / {dq['blocked']} blocked")
+        if dq.get("captain_regret_mean") is not None:
+            line += (f" | captain regret {dq['captain_regret_mean']} avg over "
+                     f"{dq['captain_gws_scored']} GWs")
+        L.append(line)
+
+    g = d.get("gate")
+    if g:
+        L.append(f"- **Latest gate**: {g['status'].upper()} ({g['action_type']})"
+                 + (f" — failed: {'; '.join(g['failed'])}" if g["failed"] else ""))
+
+    ap = d.get("approval") or {}
+    if ap.get("state") == "proposed":
+        L.append(f"- **Needs you**: proposal `{ap.get('rec_id')}` "
+                 f"({ap.get('action')}) awaits your call — `fpl approve "
+                 "approved|rejected|deferred`")
+    elif ap.get("state") == "approved":
+        L.append(f"- **Approved, unexecuted**: `{ap.get('rec_id')}` "
+                 f"({ap.get('action')}) not yet in official picks — act on the "
+                 "FPL site, then update squad.yaml")
+    elif ap.get("state") in ("rejected", "deferred"):
+        L.append(f"- **Last proposal {ap['state']}** (`{ap.get('rec_id')}`) — "
+                 "stands until superseded")
 
     if d["recent_decisions"]:
         L += ["", "## Recent decisions (newest last)"]
@@ -205,6 +252,10 @@ def render(d: dict) -> str:
         L += ["", "## Data caveats"]
         L += [f"- BLOCKER: {b}" for b in fr["blockers"]]
         L += [f"- warning: {w}" for w in fr["warnings"][:4]]
+    research = (g or {}).get("next_research") or []
+    if research:
+        L += ["", "## Research queue (most urgent first)"]
+        L += [f"- [ ] {r}" for r in research[:4]]
     if d["open_items"]:
         L += ["", "## Open items"] + [f"- [ ] {t}" for t in d["open_items"][:6]]
     return "\n".join(L) + "\n"

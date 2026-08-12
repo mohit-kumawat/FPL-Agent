@@ -291,24 +291,29 @@ def price_timing_notes(players: pd.DataFrame, in_ids: list[int],
     return notes
 
 
-def _future_double(scenarios: list[dict] | None, gw: int) -> tuple[float, str]:
-    """(probability of a usable future double, provenance label).
+def _future_double(scenarios: list[dict] | None, gw: int) -> tuple[float, str, str]:
+    """(probability of a usable future double, provenance label, provenance kind).
 
     Scenario facts come from the agent's research (fixture congestion, cup
     runs) via signals; the pipeline only does the arithmetic. With no
     scenarios, a default prior applies while doubles are still plausibly
     ahead — after DEFAULT_DOUBLE_LAST_GW silence means none.
+
+    The kind ("signal" / "default" / "late") matters downstream: an ACTIONABLE
+    play-now must never rest on the default prior alone (see chip_advice's
+    dominance test) — a default probability is a model assumption, not evidence.
     """
     future = [s for s in (scenarios or [])
               if s.get("kind") == "double" and int(s.get("gw", 0)) > gw]
     if future:
         best = max(future, key=lambda s: float(s.get("prob", 0)))
         return (float(best.get("prob", 0)),
-                f"[SIGNAL] double expected GW{best['gw']} (p={best.get('prob')})")
+                f"[SIGNAL] double expected GW{best['gw']} (p={best.get('prob')})",
+                "signal")
     if gw <= DEFAULT_DOUBLE_LAST_GW:
         return DEFAULT_DOUBLE_PROB, ("[MODEL] no scenario research yet — assuming a "
-                                     f"usable double before season end (p={DEFAULT_DOUBLE_PROB})")
-    return 0.0, "[MODEL] season too late for an unresearched double"
+                                     f"usable double before season end (p={DEFAULT_DOUBLE_PROB})"), "default"
+    return 0.0, "[MODEL] season too late for an unresearched double", "late"
 
 
 def chip_advice(boot: dict, xi_result: dict | None, chips_available: list[str],
@@ -358,7 +363,7 @@ def chip_advice(boot: dict, xi_result: dict | None, chips_available: list[str],
                          "[RECOMMENDATION] Hold — chip EV needs a settled squad.")
         return notes
 
-    p_double, why = _future_double(scenarios, gw)
+    p_double, why, provenance = _future_double(scenarios, gw)
 
     def _n_fx(row) -> float:
         """Fixture count for a row, defaulting to 1 on missing/NaN."""
@@ -402,9 +407,29 @@ def chip_advice(boot: dict, xi_result: dict | None, chips_available: list[str],
     def clears(now_ev: float, hold_ev: float) -> bool:
         return now_ev > 0.05 and now_ev >= hold_ev * CHIP_PLAY_MARGIN
 
-    winner = max((s for s in scored if clears(s[1], s[2])),
+    def prior_dependent(now_ev: float, hold_ev: float) -> bool:
+        """True when 'play now' holds under the DEFAULT prior but flips if a
+        future double is certain. Evidence rule: a default probability may never
+        produce an ACTIONABLE recommendation — the dominance test is what makes
+        the default-prior path safe. Play-now survives it only when it wins even
+        against a guaranteed future double (then no scenario research could
+        change the answer)."""
+        if provenance != "default" or p_double <= 0:
+            return False
+        return clears(now_ev, hold_ev) and not clears(now_ev, hold_ev / p_double)
+
+    winner = max((s for s in scored
+                  if clears(s[1], s[2]) and not prior_dependent(s[1], s[2])),
                  key=lambda s: s[1] - s[2], default=None)
     for family, now_ev, hold_ev in scored:
+        if prior_dependent(now_ev, hold_ev):
+            notes.append(
+                f"[MODEL] {label(family)}: now +{now_ev:.1f} EP clears the bar only "
+                f"under the ASSUMED double prior (p={p_double}) and holds if a double "
+                "is certain — OWNER CHOICE pending scenario research: confirm or rule "
+                "out a usable future double (`scenarios:` in signals/). "
+                "A default probability never fires a chip.")
+            continue
         verdict = "play" if clears(now_ev, hold_ev) else "hold"
         if winner is not None and family == winner[0]:
             prefix = f"[RECOMMENDATION] {label(family)} NOW"

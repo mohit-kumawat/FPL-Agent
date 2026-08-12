@@ -16,8 +16,11 @@ over its horizon; don't stretch reasoning past it).
    here — press conferences, predicted lineups, beat writers.
 3. Write what you find as **minutes signals** — prefer the `role:` vocabulary
    (`expected_starter`, `rotation_risk`, `managed_minutes`, `bench_role`,
-   `not_in_predicted_xi`, `ruled_out`) over raw bounds, each with a source. Then
-   `uv run fpl daily --force` once to merge them.
+   `not_in_predicted_xi`, `ruled_out`) over raw bounds. **Each file needs an
+   `evidence:` block** (tier, url, publisher, published_at) or it applies to
+   nothing, and `expected_starter` / `ruled_out` need a tier-1 club source or
+   two independent tier-2 outlets — one predicted lineup is a forecast, not a
+   fact. Then `uv run fpl daily --force` once to merge them.
 4. Compare the model's build against expert consensus where they disagree:
    `uv run fpl build` vs `uv run fpl build --lock <ids>`, present both EPs.
 5. Preseason the model is at its weakest: team strength ratings may still be all
@@ -33,8 +36,11 @@ reasoning and its source. End with a **Falsifiers** section: for the captain
 and any contested starter, state what late news would change the call
 ("captain X unless he's not in the leaked XI").
 
-You are unattended: never wait for an answer; record owner decisions with
-`uv run fpl pending add "<text>"`. Never submit anything to the FPL site.
+You are unattended: never wait for an answer. The squad is a **proposal** —
+the owner records the go/no-go with `uv run fpl approve approved|rejected|
+deferred`, and only then enters it on the FPL site and updates `squad.yaml`.
+Never do either yourself. Use `uv run fpl pending add "<text>"` for
+non-decision follow-ups.
 
 Signals need FPL element ids, and the reports don't carry them. Use `jq`
 against the newest snapshot — never Read it, it's ~1.3MB on one line:
@@ -67,5 +73,7 @@ Write the brief to the exact path given at the end of this message. Structure:
 <what news changes which call>
 
 ## Needs you
-<the go/no-go and anything else only the owner can decide>
+<the go/no-go — `uv run fpl approve approved|rejected|deferred` — plus any
+OWNER CHOICE the decision gate handed over, and anything else only the owner
+can decide>
 ```

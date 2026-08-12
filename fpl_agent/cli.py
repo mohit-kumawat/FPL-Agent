@@ -20,6 +20,11 @@ def main() -> None:
     p = sub.add_parser("pending")
     p.add_argument("op", choices=["list", "add", "done"], nargs="?", default="list")
     p.add_argument("text", nargs="*")
+    a = sub.add_parser("approve",
+                       help="record your decision on the latest proposal")
+    a.add_argument("op", choices=["approved", "rejected", "deferred", "status"],
+                   nargs="?", default="status")
+    a.add_argument("note", nargs="*")
     b = sub.add_parser("build");    b.add_argument("--budget", type=float, default=100.0)
     b.add_argument("--lock", type=str, default="",
                    help="comma-separated player ids to force into the squad")
@@ -27,6 +32,26 @@ def main() -> None:
     bt = sub.add_parser("backtest"); bt.add_argument("--train-gws", type=int, default=26)
     sub.add_parser("refresh")
     args = ap.parse_args()
+
+    if args.cmd == "approve":
+        # ledger-only: no network, no analysis — the owner is recording a call
+        from . import approvals
+        if args.op in approvals.OWNER_DECISIONS:
+            try:
+                ev = approvals.record_owner_decision(args.op, " ".join(args.note))
+            except ValueError as exc:
+                sys.exit(str(exc))
+            print(f"recorded: proposal {ev['rec_id']} {ev['decision']}")
+            if args.op == "approved":
+                print("act on the FPL site, update squad.yaml, and the next "
+                      "daily run will reconcile against official picks")
+        st = approvals.state()
+        if st.get("state") == "none":
+            print("no proposals on record yet")
+        else:
+            print(f"latest proposal {st['rec_id']}: {st['action']} "
+                  f"(GW{st.get('gw')}) — state: {st['state']}")
+        return
 
     from . import data
 

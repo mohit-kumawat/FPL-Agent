@@ -22,9 +22,16 @@ def _players_line(df: pd.DataFrame) -> str:
 
 
 def decision_summary(ctx: dict) -> dict:
-    """Compact record of today's recommendation for decisions.jsonl."""
+    """Compact record of today's recommendation for decisions.jsonl.
+
+    Also banks the COUNTERFACTUAL at decision time — the XI and the captain's
+    EP as they were when the call was made. Captain regret can only be scored
+    honestly from these; reconstructing them later from fresher data would
+    grade a decision nobody made.
+    """
     rec = ctx.get("recommendation") or {}
-    out = {"date": ctx["date"], "triggers": ctx["work"]["triggers"]}
+    out = {"date": ctx["date"], "triggers": ctx["work"]["triggers"],
+           "gw": (ctx.get("stage") or {}).get("next_gw")}
     if "transfers" in rec:
         d = rec["transfers"]
         out["action"] = d["action"]
@@ -38,6 +45,15 @@ def decision_summary(ctx: dict) -> dict:
         out["cost"] = rec["initial_build"]["cost"]
     if "captain" in rec:
         out["captain"] = rec["captain"]["pick"]
+    if "xi" in rec:
+        out["xi_names"] = list(rec["xi"]["xi"]["web_name"])
+        out["xi_ep"] = rec["xi"]["expected_points"]
+        cap_row = rec["xi"].get("captain")
+        if cap_row is not None:
+            out["captain_ep"] = round(float(cap_row["ep_next"]), 2)
+    gate = ctx.get("gate")
+    if gate:
+        out["gate"] = gate["status"]
     return out
 
 
@@ -127,6 +143,26 @@ def _render_md(ctx: dict) -> str:
     if not ctx["findings"] and not ctx.get("rating") and not ctx.get("signal_notes"):
         lines.append("- None today.")
 
+    # 3b. the decision gate — evidence verdict BEFORE the recommendation, so a
+    # blocked proposal is read as blocked, not skimmed as advice
+    gate = ctx.get("gate")
+    if gate:
+        from . import action_gate
+        lines += ["", "## Decision gate"]
+        lines.append(f"- **{action_gate.headline(gate)}**")
+        for r in gate.get("failed_requirements", []):
+            lines.append(f"  - ✗ {r}")
+        cap_gate = gate.get("captain") or {}
+        if cap_gate.get("status") == "owner_choice":
+            lines.append("- Captain: **OWNER CHOICE — EVIDENCE INCOMPLETE**")
+            for u in cap_gate.get("unevidenced", []):
+                lines.append(f"  - ✗ {u}")
+        if (gate.get("chips") or {}).get("status") == "owner_choice":
+            lines.append("- Chips: OWNER CHOICE — EV depends on unresearched "
+                         "double/blank scenarios (see chip lines below)")
+        for r in gate.get("next_research", [])[:5]:
+            lines.append(f"- next research: {r}")
+
     # 4. recommended action
     lines += ["", "## Recommended action"]
     if rec is None:
@@ -193,6 +229,28 @@ def _render_md(ctx: dict) -> str:
         lines.append(f"- [MEMORY] Previous decision ({pd_.get('date')}): "
                      f"{pd_.get('action')} — compare before acting.")
 
+    # 4a2. owner decision — a recommendation is a PROPOSAL until approved, and
+    # approved is not executed until the official picks confirm it
+    appr = ctx.get("approval")
+    if appr and appr.get("state") not in (None, "none"):
+        lines += ["", "## Owner decision"]
+        st = appr["state"]
+        what = f"{appr.get('action')} (proposal `{appr.get('rec_id')}`)"
+        if st == "proposed":
+            lines.append(f"- **AWAITING YOUR DECISION**: {what} — record it with "
+                         "`uv run fpl approve approved|rejected|deferred [note]`. "
+                         "Nothing changes hands until you do; squad.yaml is yours "
+                         "to update only after acting on the FPL site.")
+        elif st == "approved":
+            lines.append(f"- {what} **approved** — not yet visible in official "
+                         "picks; reconciliation retries each run until it is.")
+        elif st == "reconciled":
+            lines.append(f"- {what} approved and **reconciled** against official "
+                         "FPL picks — executed.")
+        else:
+            lines.append(f"- {what} **{st}** — stays on record until superseded"
+                         + (f" (note: {appr['owner_note']})" if appr.get("owner_note") else ""))
+
     # 4b. uncertainty flags
     unc = ctx.get("uncertainty") or []
     if unc:
@@ -258,7 +316,8 @@ def _json_ctx(ctx: dict) -> dict:
 
     keep = {k: ctx.get(k) for k in
             ("date", "stage", "verification", "freshness", "changes", "work",
-             "models_ran", "findings", "signal_notes", "uncertainty")}
+             "models_ran", "findings", "signal_notes", "uncertainty",
+             "gate", "approval", "shadow")}
     rec = ctx.get("recommendation")
     if rec:
         keep["decision"] = decision_summary(ctx)

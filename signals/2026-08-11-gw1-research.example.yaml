@@ -2,6 +2,15 @@ date: 2026-08-11
 confidence: medium
 ttl_days: 10          # ignored automatically after this; no manual deletion needed
 source: "Web research: OneFPL GW1 injuries + predicted lineups; Fantasy Football Scout pre-season (Aug 10); FPL Copilot / AllAboutFPL / Onside GW1 consensus"
+evidence:             # REQUIRED for the file to move anything (see AGENT.md)
+  tier: 2             # 1 club/manager/league | 2 named outlet | 3 aggregator
+  url: https://www.fantasyfootballscout.co.uk/2026/08/10/predicted-lineups
+  publisher: "Fantasy Football Scout"
+  published_at: 2026-08-10T18:00:00Z
+  # tier rules: tier 3 (or no evidence block) is a WATCH item — bounds and EP
+  # are not applied. Tier 2 may set forecast bounds (rotation_risk etc.); the
+  # hard roles `expected_starter` / `ruled_out` need tier 1 OR a second tier-2
+  # file from a different domain making the same claim. Tier 1 may set anything.
 notes: >
   GW1 2026/27 research sweep. Haaland: nailed, rested (Norway out of WC quarters),
   ~9 preseason goals, expert consensus #1 captain (proj 7.7). Man City under new

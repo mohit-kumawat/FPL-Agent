@@ -14,7 +14,7 @@ from typing import Any
 import pandas as pd
 import yaml
 
-from . import config
+from . import config, evidence
 
 STATE_FILE = config.MEMORY_DIR / "state.json"
 DECISIONS_FILE = config.MEMORY_DIR / "decisions.jsonl"
@@ -26,6 +26,7 @@ LEARNINGS_FILE = config.MEMORY_DIR / "learnings.md"
 CALIBRATION_FILE = config.MEMORY_DIR / "calibration.jsonl"
 SIGNAL_LOG_FILE = config.MEMORY_DIR / "signal_log.jsonl"
 SIGNAL_SCORES_FILE = config.MEMORY_DIR / "signal_scores.jsonl"
+DECISION_SCORES_FILE = config.MEMORY_DIR / "decision_scores.jsonl"
 
 for _d in (PREDICTIONS_DIR, SIGNALS_DIR):
     _d.mkdir(parents=True, exist_ok=True)
@@ -124,21 +125,29 @@ def log_applied_signals(gw: int, frame: pd.DataFrame) -> None:
     recommendation was actually based on. Scored after the gameweek by
     score_signals(), which is how the agent finds out whether its research was
     any good — the model's own accuracy never measured that.
+
+    A claim revised mid-week (rotation risk on Monday, ruled out at Friday's
+    presser) appends a superseding entry — score_signals reads the latest per
+    player, so the grade lands on the claim the advice actually rested on.
     """
     if frame is None or not len(frame):
         return
-    seen = {(r.get("gw"), r.get("player_id")) for r in _read_jsonl(SIGNAL_LOG_FILE)}
+    last: dict[tuple[Any, Any], tuple] = {}
+    for r in _read_jsonl(SIGNAL_LOG_FILE):
+        last[(r.get("gw"), r.get("player_id"))] = (
+            r.get("xmins_min"), r.get("xmins_max"), r.get("sources") or "")
     for pid, row in frame.iterrows():
         lo, hi = row.get("xmins_min"), row.get("xmins_max")
         if pd.isna(lo) and pd.isna(hi):
             continue                      # ep_per_gw-only: nothing minutes-shaped
-        if (gw, int(pid)) in seen:
-            continue
+        claim = (None if pd.isna(lo) else float(lo),
+                 None if pd.isna(hi) else float(hi),
+                 row.get("sources") or "")
+        if last.get((gw, int(pid))) == claim:
+            continue                      # unchanged since it was last logged
         _append(SIGNAL_LOG_FILE, {
             "gw": int(gw), "player_id": int(pid),
-            "xmins_min": None if pd.isna(lo) else float(lo),
-            "xmins_max": None if pd.isna(hi) else float(hi),
-            "sources": row.get("sources") or "",
+            "xmins_min": claim[0], "xmins_max": claim[1], "sources": claim[2],
         })
 
 
@@ -146,58 +155,136 @@ def score_signals(gw: int, actual: pd.DataFrame) -> dict | None:
     """Did the gameweek's minutes claims hold? Scored only once per gameweek.
 
     A floor claim (`xmins_min`) predicts the player plays roughly that share of
-    90; a cap (`xmins_max`) predicts he does not exceed it. Both are checked
-    against real minutes with a 15-minute tolerance, because a claim of "starts"
-    is not falsified by an 80th-minute substitution.
+    a full match; a cap (`xmins_max`) predicts he does not exceed it. Both are
+    checked against real minutes with a 15-minute tolerance, because a claim of
+    "starts" is not falsified by an 80th-minute substitution. Available minutes
+    scale with the fixture count, so a double gameweek (120 of 180 played) does
+    not falsify a per-match rotation cap of 0.70.
     """
-    claims = [r for r in _read_jsonl(SIGNAL_LOG_FILE) if r.get("gw") == gw]
+    latest: dict[int, dict] = {}
+    for r in _read_jsonl(SIGNAL_LOG_FILE):
+        if r.get("gw") == gw:
+            latest[int(r["player_id"])] = r   # later entries supersede revisions
+    claims = list(latest.values())
     if not claims:
         return None
     if any(r.get("gw") == gw for r in _read_jsonl(SIGNAL_SCORES_FILE)):
         return None                       # already scored; never double-count
-    mins = actual.groupby("element")["minutes"].sum() if len(actual) else pd.Series(dtype=float)
+    played_gw = (actual.groupby("element")["minutes"].agg(total="sum", fixtures="size")
+                 if len(actual) else pd.DataFrame(columns=["total", "fixtures"]))
 
     tol = 15.0
-    hits, misses, by_source, unscored = 0, 0, {}, 0
+    hits, misses, by_source, by_type, unscored = 0, 0, {}, {}, 0
     for c in claims:
         pid = int(c["player_id"])
-        if pid not in mins.index:
+        if pid not in played_gw.index:
             unscored += 1                 # not in the panel: no evidence either way
             continue
-        played = float(mins.loc[pid])
+        played = float(played_gw.loc[pid, "total"])
+        full = 90.0 * int(played_gw.loc[pid, "fixtures"])
         lo, hi = c.get("xmins_min"), c.get("xmins_max")
         ok = True
         if lo is not None:
-            ok = ok and played >= float(lo) * 90.0 - tol
+            ok = ok and played >= float(lo) * full - tol
         if hi is not None:
-            ok = ok and played <= float(hi) * 90.0 + tol
+            ok = ok and played <= float(hi) * full + tol
         hits, misses = (hits + 1, misses) if ok else (hits, misses + 1)
         for src in [s for s in str(c.get("sources", "")).split(",") if s]:
             agg = by_source.setdefault(src, {"hit": 0, "miss": 0})
             agg["hit" if ok else "miss"] += 1
+        agg = by_type.setdefault(claim_type(lo, hi), {"hit": 0, "miss": 0})
+        agg["hit" if ok else "miss"] += 1
 
     record = {"gw": int(gw), "claims": len(claims), "hits": hits, "misses": misses,
-              "unscored": unscored, "by_source": by_source}
+              "unscored": unscored, "by_source": by_source, "by_type": by_type}
     _append(SIGNAL_SCORES_FILE, record)
     return record
 
 
+def claim_type(lo, hi) -> str:
+    """What kind of claim a pair of minutes bounds encodes.
+
+    availability — a hard cap near zero ("ruled out"); starter — a high floor
+    ("expected starter"); minutes — everything softer (rotation, managed load).
+    Scoring by type matters because they fail differently: a wrong availability
+    call costs a whole slot, a wrong rotation guess costs a bench ordering.
+    """
+    if hi is not None and float(hi) <= 0.10:
+        return "availability"
+    if lo is not None and float(lo) >= 0.80:
+        return "starter"
+    return "minutes"
+
+
 def signal_scorecard() -> dict:
-    """Season-to-date research accuracy, and the least reliable sources."""
+    """Season-to-date research accuracy: overall, by claim type, and the least
+    reliable sources."""
     rows = _read_jsonl(SIGNAL_SCORES_FILE)
     hits = sum(r.get("hits", 0) for r in rows)
     misses = sum(r.get("misses", 0) for r in rows)
     by_source: dict[str, dict] = {}
+    by_type: dict[str, dict] = {}
     for r in rows:
         for src, agg in (r.get("by_source") or {}).items():
             cur = by_source.setdefault(src, {"hit": 0, "miss": 0})
             cur["hit"] += agg.get("hit", 0)
             cur["miss"] += agg.get("miss", 0)
-    worst = sorted((s for s in by_source.items() if sum(s[1].values()) >= 2),
+        for t, agg in (r.get("by_type") or {}).items():
+            cur = by_type.setdefault(t, {"hit": 0, "miss": 0})
+            cur["hit"] += agg.get("hit", 0)
+            cur["miss"] += agg.get("miss", 0)
+    # a source needs at least one MISS to be "least reliable" — with few sources
+    # an unfiltered bottom-3 would badge a 100%-accurate source as unreliable
+    worst = sorted((s for s in by_source.items()
+                    if s[1]["miss"] and sum(s[1].values()) >= 2),
                    key=lambda kv: kv[1]["hit"] / max(1, sum(kv[1].values())))[:3]
     return {"gws_scored": len(rows), "hits": hits, "misses": misses,
             "accuracy": round(hits / (hits + misses), 2) if hits + misses else None,
+            "by_type": by_type,
             "least_reliable": [{"source": s, **a} for s, a in worst]}
+
+
+def score_captaincy(gw: int, actual: pd.DataFrame, names: dict[int, str]) -> dict | None:
+    """Captain regret for a finished gameweek, from the decision actually logged.
+
+    Regret = best actual score in the recommended XI minus the captain's actual
+    score. Computable honestly only because decision_summary stores the XI and
+    captain AT DECISION TIME — reconstructing the counterfactual later from
+    fresher data would grade a decision nobody made. Scored once per GW.
+    """
+    if any(r.get("gw") == gw for r in _read_jsonl(DECISION_SCORES_FILE)):
+        return None
+    dec = next((d for d in reversed(_read_jsonl(DECISIONS_FILE))
+                if d.get("gw") == gw and d.get("captain") and d.get("xi_names")), None)
+    if dec is None or actual is None or not len(actual):
+        return None
+    pts_by_id = actual.groupby("element")["total_points"].sum()
+    pts = {names[int(i)]: float(p) for i, p in pts_by_id.items() if int(i) in names}
+    cap = dec["captain"]
+    xi_pts = [pts[n] for n in dec["xi_names"] if n in pts]
+    if cap not in pts or not xi_pts:
+        return None                      # renamed/missing player: no honest score
+    record = {"gw": int(gw), "captain": cap, "captain_actual": pts[cap],
+              "xi_ceiling": max(xi_pts),
+              "regret": round(max(xi_pts) - pts[cap], 1),
+              "gate": dec.get("gate")}
+    _append(DECISION_SCORES_FILE, record)
+    return record
+
+
+def decision_quality(last: int = 38) -> dict:
+    """Gate outcomes and captain regret, season to date — the abstention record."""
+    gates = [d.get("gate") for d in _read_jsonl(DECISIONS_FILE)[-last:] if d.get("gate")]
+    regrets = [r["regret"] for r in _read_jsonl(DECISION_SCORES_FILE)[-last:]
+               if r.get("regret") is not None]
+    return {
+        "qualified": sum(1 for g in gates if g == "qualified"),
+        "owner_choice": sum(1 for g in gates if g == "owner_choice"),
+        "blocked": sum(1 for g in gates if g == "blocked"),
+        "captain_regret_mean": (round(sum(regrets) / len(regrets), 2)
+                                if regrets else None),
+        "captain_gws_scored": len(regrets),
+    }
 
 
 # ------------------------------------------------------------------ learnings
@@ -392,12 +479,18 @@ def load_signals(now: datetime | None = None) -> tuple[pd.DataFrame, list[dict]]
 
     Signal file schema:
       date: 2026-08-15
-      source: "press conference"
+      source: "press conference"           # human context; evidence is separate
+      evidence:                            # WHO said it — decides what it may do
+        tier: 1                            # 1 official / 2 named outlet / 3 other
+        url: https://club.com/news/x
+        publisher: "Arsenal.com"
+        published_at: 2026-08-15T13:00:00Z
       confidence: high | medium | low      # weights ep_per_gw 1.0/0.6/0.3
       ttl_days: 14                         # or an explicit `expires: 2026-08-22`
       notes: "free text"
       adjustments:
         - player_id: 448
+          role: expected_starter           # preferred over raw numbers
           ep_per_gw: -0.5     # LAST RESORT: |value| <= 2 enforced here, but
                               # policy (AGENT.md) is +/-0.5 max, direct quote
                               # in `source`, role facts only
@@ -405,20 +498,25 @@ def load_signals(now: datetime | None = None) -> tuple[pd.DataFrame, list[dict]]
           xmins_max: 0.5      # optional cap ("not a predicted starter")
           reason: "why"
 
-    Minutes news should use xmins_min/xmins_max — signals carry minutes FACTS,
-    not quality opinions. ep_per_gw exists only for role information minutes
-    can't express (pen duty gained, position change).
-    Minutes bounds are NOT confidence-weighted — they are facts or they should
-    not be written.
+    Evidence rules (fpl_agent/evidence.py): tier 3 — and any file without a
+    checkable evidence block — is a WATCH item: parsed, reported, applied to
+    nothing. Tier 2 may set forecast bounds (rotation, managed minutes) and the
+    hard availability roles (`ruled_out`, `expected_starter`) only when a second
+    tier-2 file from a different domain makes the same claim. Tier 1 may set
+    anything. Cross-file contradictions resolve to the higher tier; equal tiers
+    drop both bounds. Minutes bounds are never confidence-weighted — they are
+    facts or they should not be written.
 
-    Safety: expired files and files failing validation are ignored entirely and
-    reported in the notes, so a stale or malformed signal cannot silently steer
-    a recommendation. An autonomous operator must never depend on a human
-    remembering to delete a file.
+    Safety: expired files (the earlier of the file's own expiry and the
+    evidence tier's permitted lifetime) and files failing validation are ignored
+    entirely and reported in the notes. An autonomous operator must never depend
+    on a human remembering to delete a file.
     """
     now = now or datetime.now(timezone.utc)
-    rows: dict[int, dict] = {}
     notes: list[dict] = []
+    parsed: list[dict] = []
+
+    # pass 1 — parse, validate, classify evidence
     for f in sorted(SIGNALS_DIR.glob("*.y*ml")):
         note = {"file": f.name, "applied": False, "problems": []}
         try:
@@ -428,8 +526,11 @@ def load_signals(now: datetime | None = None) -> tuple[pd.DataFrame, list[dict]]
             notes.append(note)
             continue
         note.update({k: doc.get(k) for k in ("date", "source", "notes", "confidence")})
+        ev = evidence.parse(doc)
+        note["evidence"] = {"tier": ev["tier"], "publisher": ev["publisher"],
+                            "domain": ev["domain"], "problems": ev["problems"]}
 
-        expiry = _signal_expiry(doc)
+        expiry = evidence.effective_expiry(ev, _signal_expiry(doc))
         if expiry and expiry < now:
             note["problems"] = [f"expired {expiry:%Y-%m-%d} — ignored (delete or refresh)"]
             notes.append(note)
@@ -439,37 +540,89 @@ def load_signals(now: datetime | None = None) -> tuple[pd.DataFrame, list[dict]]
             note["problems"] = problems
             notes.append(note)
             continue
+        parsed.append({"file": f.name, "doc": doc, "ev": ev, "note": note})
+        notes.append(note)
 
+    # pass 2 — corroboration index for hard roles: (player, role) -> domains
+    hard_domains: dict[tuple[int, str], set[str]] = {}
+    for p in parsed:
+        if p["ev"]["tier"] > 2 or not p["ev"]["domain"]:
+            continue
+        for adj in p["doc"].get("adjustments", []) or []:
+            role = adj.get("role")
+            if role in evidence.HARD_ROLES:
+                hard_domains.setdefault((int(adj["player_id"]), role),
+                                        set()).add(p["ev"]["domain"])
+
+    # pass 3 — merge, tier rules deciding what each adjustment may do
+    rows: dict[int, dict] = {}
+    tiers: dict[int, dict] = {}          # pid -> {"min": tier, "max": tier}
+    for p in parsed:
+        f_name, doc, ev, note = p["file"], p["doc"], p["ev"], p["note"]
         weight = SIGNAL_CONFIDENCE_WEIGHT.get(
             str(doc.get("confidence", "medium")).lower(), 0.6)
+        applied_any = False
         for adj in doc.get("adjustments", []) or []:
             pid = int(adj["player_id"])
+            role = adj.get("role")
+            corroborated = len(hard_domains.get((pid, role), set())) >= 2
+            bounds_ok, why_not = evidence.may_apply_bounds(ev, role, corroborated)
+            bounds = adjustment_bounds(adj) if bounds_ok else {}
+            has_bounds = any(bounds.get(k) is not None
+                             for k in ("xmins_min", "xmins_max"))
+            has_ep = evidence.may_apply_ep(ev) and adj.get("ep_per_gw") is not None
+            if not has_bounds and not has_ep:
+                # nothing this adjustment may do — say why, create no row: a
+                # phantom 0.0-EP row would claim the file moved the player
+                if why_not:
+                    note["problems"].append(f"player {pid}: not applied — {why_not}")
+                continue
+
             r = rows.setdefault(pid, {"ep_per_gw": 0.0, "xmins_min": None,
                                       "xmins_max": None, "sources": ""})
+            t = tiers.setdefault(pid, {"min": 99, "max": 99})
             # attribution: which file(s) moved this player, so score_signals can
             # tell the agent WHICH source keeps being wrong
             srcs = [s for s in r["sources"].split(",") if s]
-            if f.name not in srcs:
-                srcs.append(f.name)
+            if f_name not in srcs:
+                srcs.append(f_name)
             r["sources"] = ",".join(srcs)
-            r["ep_per_gw"] += weight * float(adj.get("ep_per_gw", 0.0))
-            bounds = adjustment_bounds(adj)   # role defaults + explicit overrides
-            if bounds.get("xmins_min") is not None:
-                r["xmins_min"] = max(r["xmins_min"] or 0.0, float(bounds["xmins_min"]))
-            if bounds.get("xmins_max") is not None:
-                r["xmins_max"] = min(r["xmins_max"] if r["xmins_max"] is not None else 1.0,
-                                     float(bounds["xmins_max"]))
-        note["applied"] = True
-        notes.append(note)
+            if has_ep:
+                r["ep_per_gw"] += weight * float(adj["ep_per_gw"])
+            if has_bounds:
+                if bounds.get("xmins_min") is not None:
+                    r["xmins_min"] = max(r["xmins_min"] or 0.0, float(bounds["xmins_min"]))
+                    t["min"] = min(t["min"], ev["tier"])
+                if bounds.get("xmins_max") is not None:
+                    r["xmins_max"] = min(r["xmins_max"] if r["xmins_max"] is not None else 1.0,
+                                         float(bounds["xmins_max"]))
+                    t["max"] = min(t["max"], ev["tier"])
+            elif why_not:
+                note["problems"].append(f"player {pid}: bounds not applied — {why_not}")
+            applied_any = True
+        note["applied"] = applied_any
 
-    # cross-file contradictions: a floor above a cap cannot both be honoured
+    # cross-file contradictions: a floor above a cap cannot both be honoured.
+    # The higher-tier bound survives; a tie drops both — the pipeline must not
+    # pick a side the evidence didn't.
     for pid, r in rows.items():
         if r["xmins_min"] is not None and r["xmins_max"] is not None \
                 and r["xmins_min"] > r["xmins_max"]:
-            r["xmins_min"] = r["xmins_max"] = None
-            notes.append({"file": "(merged)", "applied": False, "problems": [
-                f"player {pid}: signals from different files set a floor above a "
-                "cap — both minutes bounds dropped"]})
+            t = tiers.get(pid, {"min": 99, "max": 99})
+            if t["min"] < t["max"]:
+                kept, r["xmins_max"] = "floor", None
+            elif t["max"] < t["min"]:
+                kept, r["xmins_min"] = "cap", None
+            else:
+                kept = None
+                r["xmins_min"] = r["xmins_max"] = None
+            notes.append({"file": "(merged)", "applied": kept is not None,
+                          "conflict_player": pid, "problems": [
+                f"player {pid}: signals set a floor above a cap — "
+                + (f"kept the {kept} (higher evidence tier), dropped the other"
+                   if kept else
+                   "equal tiers, both minutes bounds dropped; resolve with a "
+                   "higher-tier source")]})
 
     frame = pd.DataFrame.from_dict(rows, orient="index")
     return frame, notes
@@ -488,6 +641,10 @@ def load_scenarios(now: datetime | None = None) -> list[dict]:
     These are research facts for the chip EV engine — the pipeline computes
     EV *given* them, the agent supplies them. Malformed or expired entries
     are dropped silently here; load_signals already reports file problems.
+
+    Evidence-gated like bounds: a scenario probability feeds chip play-vs-hold
+    EV, so it can FIRE a chip — a tier-3 / unevidenced file supplying one would
+    bypass every rule the tiers enforce. Tier <= 2 only.
     """
     now = now or datetime.now(timezone.utc)
     out: list[dict] = []
@@ -496,7 +653,10 @@ def load_scenarios(now: datetime | None = None) -> list[dict]:
             doc = yaml.safe_load(f.read_text()) or {}
         except yaml.YAMLError:
             continue
-        expiry = _signal_expiry(doc)
+        ev = evidence.parse(doc)
+        if ev["tier"] > 2:
+            continue
+        expiry = evidence.effective_expiry(ev, _signal_expiry(doc))
         if expiry and expiry < now:
             continue
         for s in doc.get("scenarios", []) or []:

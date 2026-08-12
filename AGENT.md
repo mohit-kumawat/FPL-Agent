@@ -89,6 +89,11 @@ five banked free transfers, and the 0.5 sell-on fee.
 ```yaml
 date: 2026-08-15
 source: "Arteta press conference"
+evidence:                # WHO said it — decides what the file may do (rules below)
+  tier: 1                # 1 club/manager/league | 2 named outlet | 3 aggregator
+  url: https://www.arsenal.com/news/arteta-pre-match
+  publisher: "Arsenal.com"
+  published_at: 2026-08-15T13:00:00Z
 confidence: high         # high | medium | low — scales ep_per_gw 1.0 / 0.6 / 0.3
 ttl_days: 14             # or `expires: 2026-08-22`; expired files are ignored
 notes: "Saka full training, expected to start GW1"
@@ -105,6 +110,28 @@ scenarios:               # optional: future double/blank research for chip EV
     prob: 0.7
     note: "cup QF weekend rearrangements"
 ```
+
+**Evidence tiers are enforced** (`fpl_agent/evidence.py`). What a file may do
+follows from the tier of its evidence, and a tier you cannot substantiate (no
+`url`, no `published_at`) is downgraded to 3:
+
+- **tier 1** — club, manager, league or competition source: may establish any
+  fact, including the hard availability roles.
+- **tier 2** — named journalist or established outlet: forecasts only. Soft
+  roles (`rotation_risk`, `managed_minutes`, `bench_role`,
+  `not_in_predicted_xi`) apply from one source; the hard roles
+  (`expected_starter`, `ruled_out`) need tier 1 **or two tier-2 files from
+  different domains** making the same claim. One projected lineup is a
+  forecast, not a fact.
+- **tier 3 / no evidence block** — watch item. Parsed and reported, applied to
+  nothing. `source: "press conference"` with no URL cannot move a number.
+
+A source is also only current for so long: expiry is the earlier of the file's
+own `ttl_days`/`expires` and `published_at` + 14/7/3 days for tiers 1/2/3.
+Absence of news is not evidence of fitness — an API flag stays unresolved until
+you find a checkable source, not until you fail to find one. Model output is a
+forecast, never a fact: signals may carry what a person said, never what the
+model concluded.
 
 **Prefer `role` over raw numbers.** The vocabulary maps to minutes bounds the
 model applies for you: `expected_starter` (floor 0.85), `rotation_risk` (cap
@@ -166,13 +193,69 @@ so never rely on remembering to delete one.
 the report, if it has expired, fails to parse, names an unknown `role`, sets an
 effective `xmins_min` above `xmins_max` (role defaults included), puts a bound
 outside [0, 1], or uses `ep_per_gw` beyond ±2. Check the report's Key findings
-for `⚠ ... IGNORED` after writing a signal.
+for `⚠ ... IGNORED` after writing a signal. When two files contradict each other
+(a floor above a cap for the same player), the higher evidence tier wins; equal
+tiers drop both bounds and the report asks for a higher-tier source.
+
+## The decision gate and owner approval
+
+Every recommendation passes an evidence gate (`fpl_agent/action_gate.py`)
+before it reaches you. Read the report's **Decision gate** section first; the
+verdict is one of:
+
+- **QUALIFIED** — official data is verified and every player the action touches
+  has checkable availability evidence (an unflagged API status is tier-0
+  evidence; a flagged player needs an applied signal floor). Actionable as
+  written.
+- **BLOCKED** — a requirement failed and holding is safe. The gate names the
+  exact research that would unblock it; do that research, don't argue with the
+  gate.
+- **OWNER CHOICE** — the pipeline cannot decide on evidence: a close captain
+  candidate is flagged, a chip's EV hangs on unresearched scenarios, or acting
+  AND holding both carry unresolved risk. Present both sides to the owner with
+  the enumerated risks; never pick silently.
+
+Chip EV follows the same rule: a **default double-gameweek prior never fires a
+chip**. Play-now is actionable only when scenario research supports it or when
+it wins even against a certain future double.
+
+**Approval is a recorded event, not an implication.** A recommendation is a
+*proposal* until the owner decides:
+
+```
+uv run fpl approve approved|rejected|deferred [note]
+uv run fpl approve            # show the latest proposal's state
+```
+
+Proposals live in `memory/approvals.jsonl` (identical repeats collapse into
+one). Approved is still not executed: the pipeline reconciles approved actions
+against the official FPL picks and only then marks them executed. Rejected and
+deferred proposals stay on record until superseded — mention them in the brief
+rather than re-arguing them. Recommendations never touch `squad.yaml`; you
+update it only after the owner has acted on the FPL site.
+
+## Brief layout
+
+Structure every owner brief in this order — verification before opinion,
+evidence before recommendation:
+
+1. Data verification (fetched when, blockers/warnings)
+2. Decision gate verdict
+3. Model output (EP numbers, labelled `[MODEL]`)
+4. Accepted claims (which signals applied, their tiers)
+5. Rejected / conflicting claims and why
+6. Recommendation — or the abstention and what research unblocks it
+7. What would falsify this (the specific news that flips the call)
+8. Needs you: owner decision required (`fpl approve`), use-it-or-lose-it chips
+9. Next research tasks, most deadline-urgent first
 
 ## Other commands
 
 - `uv run fpl status` — JSON: GW stage, playbook, pending items, last decision.
   **Run this first every session** — it tells you where we are and what's next.
 - `uv run fpl pending [list|add <text>|done <substr>]` — pending-items tracker
+- `uv run fpl approve [approved|rejected|deferred] [note]` — record the owner's
+  decision on the latest proposal (no argument shows its state)
 - `uv run fpl build [--lock id1,id2]` — optimal 15 from scratch; `--lock` forces
   players in (use to compare a consensus pick vs the model's spread, e.g. Haaland)
 - `uv run fpl rate` — grade the current squad in `squad.yaml` vs optimal
@@ -218,12 +301,21 @@ compacts them for you — don't rebuild that by hand.
 
 **Maintained for you** (never hand-edit): `state.json`, `decisions.jsonl`,
 `runs.jsonl`, `predictions/`, `calibration.jsonl`, `signal_log.jsonl`,
-`signal_scores.jsonl`, `digest.json`, `current-context.md`. Predictions are
+`signal_scores.jsonl`, `decision_scores.jsonl`, `approvals.jsonl`,
+`shadow_scores.jsonl`, `digest.json`, `current-context.md`. Predictions are
 scored once a gameweek's points are final, and **your minutes claims are scored
-too** — the context file shows the hit rate and which of your sources keeps being
-wrong. Expired signals are auto-archived to `signals/archive/`, snapshots older
+too** — the context file shows the hit rate by claim type and which of your
+sources keeps being wrong — as is the captain call (regret vs the XI you were
+shown). Expired signals are auto-archived to `signals/archive/`, snapshots older
 than two weeks are pruned (deadline days kept for audit), and logs rotate at 30
 days. You do not manage any of that.
+
+**External data is shadow-only.** If the owner supplies odds or projected
+lineups (JSON dropped in `data/external/inbox/`), the pipeline snapshots and
+scores them against results (`memory/shadow_scores.jsonl`) but never blends
+them into EP. Promotion out of shadow is a pre-registered human decision after
+≥ 20 scored gameweeks — never yours, and never the pipeline's. Team odds are
+never player-specific evidence.
 
 ## Reference material
 

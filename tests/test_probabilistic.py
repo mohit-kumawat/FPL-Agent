@@ -240,6 +240,11 @@ def _load(tmp_path, monkeypatch, body: str):
 def test_role_vocabulary_expands_to_minutes_bounds(tmp_path, monkeypatch):
     frame, notes = _load(tmp_path, monkeypatch, """
 date: 2026-08-19
+evidence:
+  tier: 1
+  url: https://arsenal.com/news/presser
+  publisher: Arsenal.com
+  published_at: 2026-08-19T09:00:00Z
 adjustments:
   - player_id: 7
     role: expected_starter
@@ -265,6 +270,11 @@ adjustments:
 def test_explicit_bound_overrides_the_role_default(tmp_path, monkeypatch):
     frame, _ = _load(tmp_path, monkeypatch, """
 date: 2026-08-19
+evidence:
+  tier: 1
+  url: https://arsenal.com/news/presser
+  publisher: Arsenal.com
+  published_at: 2026-08-19T09:00:00Z
 adjustments:
   - player_id: 7
     role: expected_starter
@@ -297,6 +307,11 @@ def test_scenarios_load_and_validate(tmp_path, monkeypatch):
     monkeypatch.setattr(memoryio, "SIGNALS_DIR", tmp_path)
     (tmp_path / "s.yaml").write_text("""
 date: 2026-08-19
+evidence:
+  tier: 2
+  url: https://athletic.com/fixtures
+  publisher: Athletic
+  published_at: 2026-08-19T09:00:00Z
 scenarios:
   - gw: 29
     kind: double
@@ -310,3 +325,13 @@ scenarios:
 """)
     scen = memoryio.load_scenarios(now=datetime(2026, 8, 20, tzinfo=timezone.utc))
     assert len(scen) == 1 and scen[0]["gw"] == 29
+
+
+def test_unevidenced_scenarios_cannot_steer_chip_ev(tmp_path, monkeypatch):
+    """A scenario probability can FIRE a chip, so a tier-3 / no-evidence file
+    supplying one would bypass every tier rule. It must load nothing."""
+    monkeypatch.setattr(memoryio, "SIGNALS_DIR", tmp_path)
+    (tmp_path / "s.yaml").write_text(
+        "date: 2026-08-19\nscenarios:\n  - gw: 29\n    kind: double\n    prob: 0.9\n")
+    assert memoryio.load_scenarios(
+        now=datetime(2026, 8, 20, tzinfo=timezone.utc)) == []

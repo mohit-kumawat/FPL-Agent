@@ -283,6 +283,11 @@ def test_valid_signal_is_applied_with_confidence_weight(tmp_path, monkeypatch):
     frame, notes = _write_signal(tmp_path, monkeypatch, """
 date: 2026-08-19
 confidence: low
+evidence:
+  tier: 2
+  url: https://theathletic.com/fpl/12
+  publisher: The Athletic
+  published_at: 2026-08-19T09:00:00Z
 adjustments:
   - player_id: 12
     ep_per_gw: 1.0

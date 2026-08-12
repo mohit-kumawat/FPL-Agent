@@ -25,6 +25,15 @@ memory/decisions.jsonl
 memory/runs.jsonl
 memory/predictions/
 memory/research/
+memory/calibration.jsonl
+memory/signal_log.jsonl
+memory/signal_scores.jsonl
+memory/decision_scores.jsonl
+memory/approvals.jsonl
+memory/shadow_scores.jsonl
+# The generated handoff: rewritten every run, carries decisions and rank
+memory/digest.json
+memory/current-context.md
 
 # Scheduled-routine output: briefs, run logs, generated view
 memory/briefs/
@@ -41,9 +50,14 @@ eval/agent-backtest-phase01.md
 signals/*.yaml
 signals/*.yml
 !signals/*.example.yaml
+# Archived signals carry the same privacy — the globs above do not recurse
+signals/archive/
 
 # --- Caches: large, regenerable, and API-derived ---------------------------
 data/snapshots/
 data/history/
 data/*.csv
 data/*.parquet
+
+# External provider payloads (shadow mode): third-party data, never publish
+data/external/
