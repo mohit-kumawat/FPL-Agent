@@ -35,7 +35,7 @@ and produces recommendations for a human to act on.
 |---|---|
 | Docs | This file (full reference) · [AGENT.md](AGENT.md) (agent runbook) · [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Evidence | [eval/2024-25-report.md](eval/2024-25-report.md) · [eval/strategy-sim-report.md](eval/strategy-sim-report.md) · [eval/ablation-report.md](eval/ablation-report.md) |
-| Tests | `uv run pytest -q` (95 offline tests) · `uv run python eval/run_backtests.py` (replay suite) |
+| Tests | `uv run pytest -q` (106 offline tests) · `uv run python eval/run_backtests.py` (replay suite) |
 | Licence | MIT |
 
 *The rest of this file is the complete technical reference: exactly what the code
@@ -356,8 +356,9 @@ day's changes justify:
 | Change detected | Work done |
 |---|---|
 | Nothing, deadline more than three days out | **One-line log. No models.** |
-| Price changes only | Squad value and selling prices updated; no model rerun |
-| Status or news on an owned or shortlisted player | Minutes model and optimiser only |
+| Price changes on nobody relevant | Squad value updated; no model rerun |
+| Price change on an owned player | Selling prices and affordability moved — optimiser reruns |
+| Status or news on an owned player, **or on a player the standing advice says to buy** | Minutes model and optimiser only |
 | A gameweek finished | Full retrain: fetch element-summaries, rebuild the panel, **score stored predictions**, recompute |
 | A new file in `signals/` | Merge signals, then optimise |
 | Deadline within 72h | Full decision run: transfers, captain, bench, chips |
@@ -447,7 +448,7 @@ uv run fpl rate                   # grade squad.yaml against optimal
 uv run fpl pending [list|add <text>|done <substr>]
 uv run fpl backtest               # model A/B/ensemble, out-of-sample
 uv run fpl refresh                # force re-fetch
-uv run pytest -q                  # 95 offline tests, no network
+uv run pytest -q                  # 106 offline tests, no network
 uv run python eval/run_backtests.py    # point-in-time replay suite
 uv run python eval/strategy_sim.py     # full-season strategy return
 uv run python eval/ablation.py         # ablation ladder + bootstrap CIs

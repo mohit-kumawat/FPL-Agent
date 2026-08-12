@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from fpl_agent import config, daily, data, features, models, policy
+from fpl_agent import config, daily, data, features, memoryio, models, policy
 
 
 def _prior_frame(n: int = 12) -> pd.DataFrame:
@@ -206,6 +206,55 @@ def test_non_squad_news_no_longer_forces_a_retrain():
     ch["news_changes"] = [{"id": 7, "player": "Other (T2)", "news": "knock"}]
     work = daily.decide_work(ch, _boot_far_deadline(), squad, has_signals=False)
     assert not work["models"]
+
+
+def test_news_on_a_recommended_target_triggers_a_rerun():
+    """Regression: matching owned ids only meant an injury to the player the
+    standing advice says to BUY left that advice untouched until the deadline
+    window opened."""
+    squad = {"players": [{"id": 42}]}
+    ch = _changes([])
+    ch["status_changes"] = [{"id": 7, "player": "Target (T2)", "from": "a",
+                             "to": "i", "news": "out for a month"}]
+    work = daily.decide_work(ch, _boot_far_deadline(), squad,
+                             has_signals=False, target_ids=[7])
+    assert work["models"] and work["optimizer"]
+    assert any("recommended transfer target" in t for t in work["triggers"])
+
+
+def test_owned_player_news_is_labelled_as_squad_news():
+    squad = {"players": [{"id": 42}]}
+    ch = _changes([])
+    ch["status_changes"] = [{"id": 42, "player": "Mine (T1)", "from": "a",
+                             "to": "d", "news": "knock"}]
+    work = daily.decide_work(ch, _boot_far_deadline(), squad,
+                             has_signals=False, target_ids=[7])
+    assert work["models"]
+    assert any("news on squad" in t for t in work["triggers"])
+
+
+def test_targets_are_remembered_across_runs(tmp_path, monkeypatch):
+    """The trigger above only works if a run records what it recommended."""
+    import json
+    monkeypatch.setattr(memoryio, "STATE_FILE", tmp_path / "state.json")
+    memoryio.save_state({"target_ids": [7, 9]})
+    assert json.loads((tmp_path / "state.json").read_text())["target_ids"] == [7, 9]
+    assert memoryio.load_state().get("target_ids") == [7, 9]
+
+
+def test_incoming_transfers_become_the_watched_targets():
+    rec = {"transfers": {"plan": {"in": pd.DataFrame([{"id": 7}, {"id": 9}])}}}
+    assert daily.recommended_target_ids(rec) == [7, 9]
+
+
+def test_a_hold_clears_the_targets_rather_than_keeping_stale_ones():
+    rec = {"transfers": {"action": "hold", "plan": None}}
+    assert daily.recommended_target_ids(rec) == []
+
+
+def test_the_preseason_build_watches_the_whole_proposed_squad():
+    rec = {"initial_build": {"squad": pd.DataFrame([{"id": 1}, {"id": 2}])}}
+    assert daily.recommended_target_ids(rec) == [1, 2]
 
 
 def test_detect_changes_carries_element_ids():

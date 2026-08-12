@@ -22,18 +22,28 @@ def _hours_to_deadline(boot: dict) -> float | None:
     return (dl - datetime.now(timezone.utc)).total_seconds() / 3600
 
 
-def decide_work(changes: dict, boot: dict, squad: dict, has_signals: bool) -> dict:
-    """The trigger matrix. Returns which analyses to run and why."""
+def decide_work(changes: dict, boot: dict, squad: dict, has_signals: bool,
+                target_ids: list[int] | None = None) -> dict:
+    """The trigger matrix. Returns which analyses to run and why.
+
+    `target_ids` are the players the STANDING recommendation says to buy (saved
+    by the previous run). News about them matters as much as news about the
+    squad: advice to transfer in a player who has since been ruled out must not
+    survive untouched just because he isn't owned yet.
+    """
     hrs = _hours_to_deadline(boot)
-    squad_ids = [p["id"] for p in (squad.get("players") or [])]
+    squad_ids = [int(p["id"]) for p in (squad.get("players") or [])]
+    watch = set(squad_ids) | {int(t) for t in (target_ids or [])}
 
     def touches_squad(items: list[dict]) -> bool:
         # match by element id — the previous string-contains heuristic was
         # truthy for ANY item with a player label, so every news day retrained
-        if not squad_ids:
+        if not watch:
             return bool(items)
-        sq = set(squad_ids)
-        return any(i.get("id") in sq for i in items)
+        return any(i.get("id") in watch for i in items)
+
+    def owned(items: list[dict]) -> bool:
+        return any(i.get("id") in set(squad_ids) for i in items) if squad_ids else False
 
     triggers: list[str] = []
     work = {"models": False, "optimizer": False, "full_retrain": False,
@@ -46,12 +56,13 @@ def decide_work(changes: dict, boot: dict, squad: dict, has_signals: bool) -> di
         triggers.append("new GW finished — retrain + calibrate")
         work.update(models=True, optimizer=True, full_retrain=True)
     if changes["status_changes"] or changes["news_changes"]:
-        relevant = touches_squad(changes["status_changes"] + changes["news_changes"])
-        if relevant:
-            triggers.append("injury/status news — rerun minutes + optimizer")
+        news = changes["status_changes"] + changes["news_changes"]
+        if touches_squad(news):
+            who = "squad" if owned(news) else "a recommended transfer target"
+            triggers.append(f"injury/status news on {who} — rerun minutes + optimizer")
             work.update(models=True, optimizer=True)
         else:
-            triggers.append("news on non-squad players — noted, no rerun")
+            triggers.append("news on unrelated players — noted, no rerun")
     if has_signals:
         triggers.append("new signals in inbox — merge + optimize")
         work.update(models=True, optimizer=True)
@@ -72,6 +83,21 @@ def decide_work(changes: dict, boot: dict, squad: dict, has_signals: bool) -> di
     if not triggers:
         triggers.append("quiet day — no changes, deadline far")
     return work
+
+
+def recommended_target_ids(rec: dict) -> list[int]:
+    """Element ids the standing recommendation says to BUY.
+
+    Persisted to state so the next run treats news about them as relevant even
+    though they are not owned yet (see decide_work's `target_ids`). A hold
+    recommends nobody, so it clears the list rather than leaving stale targets.
+    """
+    plan = (rec.get("transfers") or {}).get("plan")
+    if plan is not None and len(plan.get("in", [])):
+        return [int(x) for x in plan["in"]["id"]]
+    if "initial_build" in rec:
+        return [int(x) for x in rec["initial_build"]["squad"]["id"]]
+    return []
 
 
 def run_daily(force: bool = False) -> dict:
@@ -111,7 +137,8 @@ def run_daily(force: bool = False) -> dict:
         n["file"] for n in signal_notes
     )
 
-    work = decide_work(changes, boot, squad, new_signals)
+    work = decide_work(changes, boot, squad, new_signals,
+                       target_ids=state.get("target_ids") or [])
     stage = lifecycle.status(boot)
 
     ctx: dict[str, Any] = {
@@ -212,7 +239,10 @@ def run_daily(force: bool = False) -> dict:
                     ep, in_ids=[int(x) for x in build["squad"]["id"]],
                     out_ids=[], owned_ids=[]))
 
-    # persist memory
+    # persist memory. Only overwrite the targets when this run actually produced
+    # a recommendation — a quiet day must not erase yesterday's.
+    if ctx.get("recommendation"):
+        state["target_ids"] = recommended_target_ids(ctx["recommendation"])
     state["signals_seen"] = sorted(n["file"] for n in signal_notes)
     state["last_gw_state"] = changes["gw_state"]
     state["stage"] = {k: stage[k] for k in
