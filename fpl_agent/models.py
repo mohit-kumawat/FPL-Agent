@@ -50,6 +50,43 @@ def expected_minutes_fraction(df: pd.DataFrame) -> pd.Series:
     return (frac * df["play_chance"]).clip(0, 1)
 
 
+def minutes_distribution(df: pd.DataFrame, xmins: pd.Series) -> pd.DataFrame:
+    """Structured minutes outlook: p_start / p_60 / p_bench / expected_minutes /
+    minutes_sd, consistent with the scalar `xmins` the EP model already uses.
+
+    `xmins` stays the single number the optimizer consumes (backward
+    compatible, values unchanged); these fields exist so the simulator,
+    reports, and signals can reason about HOW a player gets his minutes —
+    a 0.65 from "starts two in three" is not a 0.65 from "always plays an
+    hour". p_start comes from observed start rates; p_bench is the remaining
+    appearance probability; minutes_sd peaks in the rotation zone and goes to
+    zero for nailed starters and clear non-players.
+    """
+    gws = df["gws_played"].iloc[0] if len(df) else 0
+    if gws > 0 and "roll_starts" in df.columns and df["roll_starts"].notna().any():
+        start_rate = df["roll_starts"].astype(float)
+    else:
+        start_rate = pd.Series(np.nan, index=df.index)
+    prior_start = (df["starts"].astype(float) / 38).clip(0, 1)
+    price_prior = ((df["price"] - 4.0) / 10.0).clip(0.3, 0.85)
+    prior_start = prior_start.where(df["minutes"] >= _history_threshold(df), price_prior)
+    start_rate = start_rate.fillna(prior_start)
+
+    p_play = (xmins / 0.60).clip(0, 1)
+    p_60 = pd.Series(1.0 / (1.0 + np.exp(-(xmins - 0.63) / 0.09)), index=df.index)
+    p_start = (start_rate * df["play_chance"]).clip(0, 1).clip(upper=p_play)
+    p_bench = (p_play - p_start).clip(lower=0)
+    exp_minutes = xmins * 90.0
+    # binomial-style spread on the two big forks (plays at all / reaches 60'):
+    # ~45' of spread at maximum rotation uncertainty, 0 when nailed or out
+    minutes_sd = 90.0 * np.sqrt(
+        np.maximum(p_play * (1 - p_play), p_60 * (1 - p_60))) * 0.5
+    return pd.DataFrame({
+        "p_start": p_start, "p_60": p_60.clip(upper=p_play), "p_bench": p_bench,
+        "expected_minutes": exp_minutes, "minutes_sd": minutes_sd,
+    })
+
+
 # ------------------------------------------------------------- Tier P prior
 _RIDGE_FEATURES = ["xgi_p90", "xgc_p90", "ict_p90", "start_rate"]
 
@@ -240,6 +277,9 @@ def expected_points(df: pd.DataFrame, panel: pd.DataFrame | None = None,
         if "xmins_max" in signal_adjust:
             hi = out["id"].map(signal_adjust["xmins_max"])
             out["xmins"] = out["xmins"].where(hi.isna(), out["xmins"].clip(upper=hi.fillna(1)))
+
+    # structured minutes outlook (post-signal, so bounds shape the distribution)
+    out = out.join(minutes_distribution(out, out["xmins"]))
 
     # ---- realized path (blended single multiplier) ----------------------
     base = out["ep_ppg"] * out["xmins"]

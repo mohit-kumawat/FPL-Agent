@@ -11,7 +11,7 @@ from typing import Any
 import pandas as pd
 
 from . import (config, data, features, lifecycle, memoryio, models, optimizer,
-               policy, rating, report, verify)
+               policy, rating, report, simulate, verify)
 
 
 def _hours_to_deadline(boot: dict) -> float | None:
@@ -156,6 +156,18 @@ def run_daily(force: bool = False) -> dict:
         squad_ids = [p["id"] for p in (squad.get("players") or [])]
         gws_played = int(ep["gws_played"].iloc[0]) if len(ep) else 0
         signal_ids = set(signal_adjust.index.astype(int)) if len(signal_adjust) else set()
+        mode = str(squad.get("strategy_mode", "safe")).lower()
+        scenarios = memoryio.load_scenarios()
+
+        def _captain(xi_result):
+            cand_ids = [int(xi_result["captain"]["id"])] + \
+                       [int(x) for x in xi_result["xi"]["id"]]
+            try:
+                sim = simulate.captain_outlook(ep, cand_ids)
+            except Exception:  # noqa: BLE001 — simulation is framing, never a blocker
+                sim = None
+            return policy.assess_captain(xi_result, ep, mode=mode, sim=sim)
+
         if work["optimizer"]:
             if len(squad_ids) == config.SQUAD_SIZE:
                 sell = memoryio.squad_selling_prices(squad, ep)
@@ -168,12 +180,13 @@ def run_daily(force: bool = False) -> dict:
                                                    gws_played=gws_played)
                 my_squad = ep[ep["id"].isin(squad_ids)]
                 xi = optimizer.pick_xi(my_squad)
-                cap = policy.assess_captain(xi, ep)
+                cap = _captain(xi)
                 ctx["rating"] = rating.rate_squad(ep, squad_ids)
                 ctx["recommendation"] = {
                     "transfers": decision, "xi": xi, "captain": cap,
-                    "chips": policy.chip_check(boot, my_squad,
-                                               squad.get("chips_available", [])),
+                    "chips": policy.chip_advice(boot, xi,
+                                                squad.get("chips_available", []),
+                                                scenarios=scenarios),
                 }
                 ctx["uncertainty"] = policy.uncertainty_flags(
                     ep, squad_ids, signal_ids, gws_played)
@@ -187,7 +200,7 @@ def run_daily(force: bool = False) -> dict:
             else:
                 build = optimizer.build_squad(ep)
                 xi = optimizer.pick_xi(build["squad"])
-                cap = policy.assess_captain(xi, ep)
+                cap = _captain(xi)
                 ctx["recommendation"] = {
                     "initial_build": build, "xi": xi, "captain": cap,
                     "chips": policy.chip_check(boot, None,

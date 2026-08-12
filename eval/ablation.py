@@ -172,7 +172,10 @@ def main() -> None:
         log("| rung | Δtotal | per-GW Δ | 90% CI | verdict |")
         log("|---|---|---|---|---|")
         ladder = list(ARMS)
-        for lo, hi in zip(ladder, ladder[1:]):
+        # adjacent rungs decompose the edge; the ppg -> full row is the whole
+        # model's edge, which can be significant even when every rung is noisy
+        pairs = list(zip(ladder, ladder[1:])) + [("ppg", "full")]
+        for lo, hi in pairs:
             a, b = results[lo], results[hi]
             mean, ci_lo, ci_hi = paired_diff_ci(a["weekly"], b["weekly"])
             dtot = b["total"] - a["total"]   # weekly series already carry hits

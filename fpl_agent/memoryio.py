@@ -133,6 +133,20 @@ SIGNAL_CONFIDENCE_WEIGHT = {"high": 1.0, "medium": 0.6, "low": 0.3}
 SIGNAL_DEFAULT_TTL_DAYS = 14
 EP_NUDGE_LIMIT = 2.0
 
+# Structured minutes vocabulary: the agent writes the FACT it read, not a
+# number it invented. Each role expands to the xmins bounds below and merges
+# with any explicit bounds exactly as if the agent had written them (floors
+# take the max, caps the min). Numbers stay legal for cases the vocabulary
+# can't express, but the vocabulary is the preferred interface.
+SIGNAL_ROLES = {
+    "expected_starter":     {"xmins_min": 0.85},
+    "rotation_risk":        {"xmins_max": 0.70},
+    "managed_minutes":      {"xmins_max": 0.75},
+    "bench_role":           {"xmins_max": 0.45},
+    "not_in_predicted_xi":  {"xmins_max": 0.35},
+    "ruled_out":            {"xmins_max": 0.05},
+}
+
 
 def _signal_expiry(doc: dict) -> datetime | None:
     """Explicit `expires` wins; otherwise `date` + ttl_days (default 14)."""
@@ -165,6 +179,10 @@ def validate_signal_doc(doc: dict, filename: str = "?") -> list[str]:
         if not pid:
             problems.append(f"{where}: missing player_id")
             continue
+        role = adj.get("role")
+        if role is not None and role not in SIGNAL_ROLES:
+            problems.append(f"{where}: unknown role '{role}' — valid: "
+                            + ", ".join(sorted(SIGNAL_ROLES)))
         lo, hi = adj.get("xmins_min"), adj.get("xmins_max")
         for name, v in (("xmins_min", lo), ("xmins_max", hi)):
             if v is not None and not 0.0 <= float(v) <= 1.0:
@@ -238,11 +256,15 @@ def load_signals(now: datetime | None = None) -> tuple[pd.DataFrame, list[dict]]
             pid = int(adj["player_id"])
             r = rows.setdefault(pid, {"ep_per_gw": 0.0, "xmins_min": None, "xmins_max": None})
             r["ep_per_gw"] += weight * float(adj.get("ep_per_gw", 0.0))
-            if adj.get("xmins_min") is not None:
-                r["xmins_min"] = max(r["xmins_min"] or 0.0, float(adj["xmins_min"]))
-            if adj.get("xmins_max") is not None:
+            bounds = dict(SIGNAL_ROLES.get(adj.get("role"), {}))
+            for k in ("xmins_min", "xmins_max"):   # explicit bounds merge on top
+                if adj.get(k) is not None:
+                    bounds[k] = float(adj[k])
+            if bounds.get("xmins_min") is not None:
+                r["xmins_min"] = max(r["xmins_min"] or 0.0, float(bounds["xmins_min"]))
+            if bounds.get("xmins_max") is not None:
                 r["xmins_max"] = min(r["xmins_max"] if r["xmins_max"] is not None else 1.0,
-                                     float(adj["xmins_max"]))
+                                     float(bounds["xmins_max"]))
         note["applied"] = True
         notes.append(note)
 
@@ -257,3 +279,40 @@ def load_signals(now: datetime | None = None) -> tuple[pd.DataFrame, list[dict]]
 
     frame = pd.DataFrame.from_dict(rows, orient="index")
     return frame, notes
+
+
+def load_scenarios(now: datetime | None = None) -> list[dict]:
+    """Future double/blank gameweek scenarios from signals/*.yaml.
+
+    Schema (top-level key next to `adjustments`):
+      scenarios:
+        - gw: 29
+          kind: double        # or blank
+          prob: 0.7
+          note: "cup QF weekend rearrangements"
+
+    These are research facts for the chip EV engine — the pipeline computes
+    EV *given* them, the agent supplies them. Malformed or expired entries
+    are dropped silently here; load_signals already reports file problems.
+    """
+    now = now or datetime.now(timezone.utc)
+    out: list[dict] = []
+    for f in sorted(SIGNALS_DIR.glob("*.y*ml")):
+        try:
+            doc = yaml.safe_load(f.read_text()) or {}
+        except yaml.YAMLError:
+            continue
+        expiry = _signal_expiry(doc)
+        if expiry and expiry < now:
+            continue
+        for s in doc.get("scenarios", []) or []:
+            try:
+                gw = int(s["gw"])
+                kind = str(s["kind"]).lower()
+                prob = float(s.get("prob", 0.5))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if kind in ("double", "blank") and 0.0 <= prob <= 1.0 and 1 <= gw <= 38:
+                out.append({"gw": gw, "kind": kind, "prob": prob,
+                            "note": s.get("note", ""), "file": f.name})
+    return out
