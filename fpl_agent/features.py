@@ -19,13 +19,20 @@ def strength_channels(teams: pd.DataFrame, team_id: int, opp_id: int,
     try:
         me, op = teams.loc[team_id], teams.loc[opp_id]
         if is_home:
-            att = me["strength_attack_home"] / op["strength_defence_away"]
-            dfn = me["strength_defence_home"] / op["strength_attack_away"]
+            vals = (me["strength_attack_home"], op["strength_defence_away"],
+                    me["strength_defence_home"], op["strength_attack_away"])
         else:
-            att = me["strength_attack_away"] / op["strength_defence_home"]
-            dfn = me["strength_defence_away"] / op["strength_attack_home"]
-    except (KeyError, ZeroDivisionError):
+            vals = (me["strength_attack_away"], op["strength_defence_home"],
+                    me["strength_defence_away"], op["strength_attack_home"])
+    except KeyError:
         return 1.0, 1.0
+    # Preseason FPL publishes all-zero strengths; numpy turns 0/0 into a NaN
+    # warning rather than ZeroDivisionError, and the NaN then clamps silently
+    # to the clip floor. No data means neutral, not "hardest possible fixture".
+    if any(not v or v != v or v <= 0 for v in map(float, vals)):
+        return 1.0, 1.0
+    att = vals[0] / vals[1]
+    dfn = vals[2] / vals[3]
     g = config.STRENGTH_GAMMA
     return (float(min(hi, max(lo, att ** g))),
             float(min(hi, max(lo, dfn ** g))))

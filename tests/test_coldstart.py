@@ -110,6 +110,20 @@ def test_regime_note_appears_during_cold_start_only():
     assert late == []
 
 
+# -------------------------------------------------- preseason strength guard
+def test_zero_strengths_fall_back_to_neutral_not_the_clip_floor():
+    """Preseason FPL publishes all-zero strengths; 0/0 is a numpy NaN, not a
+    ZeroDivisionError, and used to clamp silently to 0.7 ('hardest fixture')."""
+    teams = pd.DataFrame([
+        {"id": 1, "strength_attack_home": 0, "strength_attack_away": 0,
+         "strength_defence_home": 0, "strength_defence_away": 0},
+        {"id": 2, "strength_attack_home": 0, "strength_attack_away": 0,
+         "strength_defence_home": 0, "strength_defence_away": 0},
+    ]).set_index("id")
+    assert features.strength_channels(teams, 1, 2, is_home=True) == (1.0, 1.0)
+    assert features.strength_channels(teams, 1, 2, is_home=False) == (1.0, 1.0)
+
+
 # ------------------------------------------------------------ trigger matrix
 def _boot_far_deadline() -> dict:
     return {"events": [{"id": 1, "is_next": True, "is_current": False,

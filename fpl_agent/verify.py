@@ -50,6 +50,12 @@ def verify_state(boot: dict, squad: dict, fixtures: list[dict],
             checks.append(f"deadline sane: GW{nxt['id']} at {nxt['deadline_time']}")
     if not fixtures:
         warnings.append("fixtures list empty")
+    strengths = [t.get(k, 0) for t in boot.get("teams", [])
+                 for k in ("strength_attack_home", "strength_defence_home")]
+    if strengths and not any(strengths):
+        warnings.append("team strength ratings are all zero (FPL publishes them "
+                        "close to the season) — fixture difficulty is neutral "
+                        "until they land")
 
     players = data.players_frame(boot)
     by_id = players.set_index("id")
