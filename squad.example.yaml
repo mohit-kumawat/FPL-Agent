@@ -13,6 +13,8 @@ season: "2026-27"
 bank: 100.0               # £m unspent (100.0 when no squad exists yet)
 free_transfers: 0         # 0-5; they bank up to 5
 chips_available: [wildcard1, wildcard2, bboost, 3xc, freehit]
+strategy_mode: safe       # safe (EP-max, default) | balanced | chase (differential
+                          # captain allowed within 1.0 EP; safe pick stays visible)
 
 players: []
 # players:

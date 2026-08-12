@@ -41,15 +41,32 @@ ttl_days: 14             # or `expires: 2026-08-22`; expired files are ignored
 notes: "Saka full training, expected to start GW1"
 adjustments:
   - player_id: 12        # FPL element id — see the lookup below
-    xmins_min: 0.9       # floor on expected-minutes fraction ("nailed")
+    role: expected_starter    # PREFERRED: write the fact you read (see roles)
     reason: "confirmed starter, was priced as rotation risk"
-  - player_id: 388       # a separate player who is NOT expected to start
-    xmins_max: 0.45      # cap ("not in predicted XI", "rotation risk")
+  - player_id: 388
+    role: not_in_predicted_xi
     reason: "omitted from the predicted XI"
+scenarios:               # optional: future double/blank research for chip EV
+  - gw: 29
+    kind: double         # double | blank
+    prob: 0.7
+    note: "cup QF weekend rearrangements"
 ```
 
-Use `xmins_min` **or** `xmins_max` for a given player, never both — a floor above
-a cap is a contradiction and the whole file is rejected.
+**Prefer `role` over raw numbers.** The vocabulary maps to minutes bounds the
+model applies for you: `expected_starter` (floor 0.85), `rotation_risk` (cap
+0.70), `managed_minutes` (cap 0.75), `bench_role` (cap 0.45),
+`not_in_predicted_xi` (cap 0.35), `ruled_out` (cap 0.05). An unknown role
+rejects the file loudly. Explicit `xmins_min` / `xmins_max` remain legal for
+facts the vocabulary can't express and override the role's default.
+
+Use a floor **or** a cap for a given player, never both — a floor above a cap
+is a contradiction and the whole file is rejected.
+
+`scenarios:` entries feed the chip expected-value engine: the pipeline computes
+Triple Captain / Bench Boost play-now-vs-hold EV *given* your double/blank
+probabilities — it never invents them. No scenarios means a conservative
+default prior early season and no assumed double after GW30.
 
 **Write minutes facts, not opinions.** Your job in a signal is to tell the model
 *who is playing* — never *who is good*; the model owns quality. The blind-label

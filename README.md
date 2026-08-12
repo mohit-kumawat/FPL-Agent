@@ -8,9 +8,12 @@ logged, and reproducible.
 
 Validated by point-in-time replay of past seasons, with no hindsight, enforced
 structurally rather than by convention. Replaying 2024/25 through the exact
-pipeline scores **2,232 points** without chips (2,267 on 2023/24) against an
-overall average of roughly 2,100 — see [§10](#10-validation--what-is-actually-proven)
-for what that does and does not prove.
+pipeline scores **2,288 points** under real matchday rules — automatic subs and
+vice-captain fallback, no chips (2,366 on 2023/24) — against an overall average
+of roughly 2,100. An ablation ladder attributes the edge: the full model beats
+a naive PPG strategy by +187/+238 points with bootstrap CIs excluding zero on
+both seasons — see [§10](#10-validation--what-is-actually-proven) for what that
+does and does not prove.
 
 ```bash
 git clone https://github.com/<you>/fpl-agent && cd fpl-agent
@@ -31,8 +34,8 @@ and produces recommendations for a human to act on.
 | | |
 |---|---|
 | Docs | This file (full reference) · [AGENT.md](AGENT.md) (agent runbook) · [CONTRIBUTING.md](CONTRIBUTING.md) |
-| Evidence | [eval/2024-25-report.md](eval/2024-25-report.md) · [eval/strategy-sim-report.md](eval/strategy-sim-report.md) |
-| Tests | `uv run pytest -q` (25 offline tests) · `uv run python eval/run_backtests.py` (replay suite) |
+| Evidence | [eval/2024-25-report.md](eval/2024-25-report.md) · [eval/strategy-sim-report.md](eval/strategy-sim-report.md) · [eval/ablation-report.md](eval/ablation-report.md) |
+| Tests | `uv run pytest -q` (84 offline tests) · `uv run python eval/run_backtests.py` (replay suite) |
 | Licence | MIT |
 
 *The rest of this file is the complete technical reference: exactly what the code
@@ -45,9 +48,10 @@ does not measure.*
 
 ## 1. What this is
 
-- **Deterministic pipeline** (`fpl_agent/`, ~2,700 lines, Python 3.13 + pandas +
+- **Deterministic pipeline** (`fpl_agent/`, ~3,400 lines, Python 3.13 + pandas +
   scikit-learn + PuLP): data collection, change detection, expected points, squad
-  optimisation, decision policy, reports, memory. Same input, same output, always.
+  optimisation, Monte Carlo outcomes, decision policy, reports, memory. Same
+  input, same output, always (simulation included — it is seeded).
 - **Headless agent** (any capable LLM session following `AGENT.md`): runs the
   pipeline, does live web research, writes findings as *signals* the models
   consume, compares today's recommendation against past decisions, messages you.
@@ -60,18 +64,20 @@ Module map:
 
 | Module | Lines | Responsibility |
 |---|---|---|
-| `data.py` | 362 | API client, snapshots, price-freshness logic, change detection, history loaders |
-| `models.py` | 284 | Minutes model, prior tier, recency + ridge ensemble, component EP, uncertainty |
-| `replay.py` | 243 | Point-in-time historical reconstruction with leakage assertions |
+| `data.py` | 365 | API client, snapshots, price-freshness logic, change detection, history loaders |
+| `models.py` | 329 | Minutes model + distribution (p_start/p_60/p_bench), prior tier, ensemble, component EP |
+| `policy.py` | 347 | Decision thresholds, captaincy + strategy modes, chip EV, price timing, flags |
+| `memoryio.py` | 318 | State, decisions, predictions, signal roles/validation, chip scenarios |
+| `replay.py` | 253 | Point-in-time historical reconstruction with leakage assertions |
 | `report.py` | 239 | Markdown + JSON report writer |
-| `memoryio.py` | 256 | State, decisions, predictions, signal loading and validation |
-| `daily.py` | 199 | Orchestrator: verify → detect changes → trigger matrix → policy |
+| `daily.py` | 231 | Orchestrator: verify → detect changes → trigger matrix → policy |
 | `optimizer.py` | 193 | Three PuLP integer programs (build / XI / transfers) |
-| `policy.py` | 164 | Decision thresholds, captaincy, uncertainty flags, chips |
+| `simulate.py` | 178 | Seeded Monte Carlo point distributions (haul/blank tails, captaincy) |
+| `features.py` | 160 | Fixture channels, set-piece flags, rolling form |
 | `lifecycle.py` | 160 | Gameweek stage machine and pending items |
-| `features.py` | 147 | Fixture channels, set-piece flags, rolling form |
-| `verify.py` | 134 | Pre-flight state verification (blocking) |
-| `cli.py`, `rating.py`, `backtest.py`, `config.py` | 355 | Entry points, squad grading, model backtest, constants |
+| `verify.py` | 140 | Pre-flight state verification (blocking) |
+| `scoring.py` | 91 | Real matchday rules: autosubs + vice-captain fallback |
+| `cli.py`, `rating.py`, `backtest.py`, `config.py` | 389 | Entry points, squad grading, model backtest, constants |
 
 ---
 
@@ -117,8 +123,11 @@ and source URL; every report states when prices were fetched and whether that ru
 refetched. Within 24h of a deadline, data older than three hours **blocks
 recommendations** rather than advising on stale prices.
 
-Price *predictions* for tonight's changes are not modelled. FPL's own Price Change
-Predictor now exposes this; wiring it in is an open roadmap item, not a claim.
+FPL's Price Change Predictor (`price_change_percent` in bootstrap) feeds timing
+advice on recommended transfers — act-tonight on imminent rises, wait on
+imminent falls, owned-value-at-risk warnings ([§7](#7-decision-policy)). The
+field's sign convention is assumed (it was all-zero preseason), and it is never
+allowed to pick a transfer, only to time one.
 
 ### 2.2 Selling prices
 
@@ -438,7 +447,7 @@ uv run fpl rate                   # grade squad.yaml against optimal
 uv run fpl pending [list|add <text>|done <substr>]
 uv run fpl backtest               # model A/B/ensemble, out-of-sample
 uv run fpl refresh                # force re-fetch
-uv run pytest -q                  # 25 offline tests, no network
+uv run pytest -q                  # 84 offline tests, no network
 uv run python eval/run_backtests.py    # point-in-time replay suite
 uv run python eval/strategy_sim.py     # full-season strategy return
 ```
@@ -463,9 +472,21 @@ impossible and asserted in the suite.
 | p10–p90 coverage | 0.83 against an 0.80 target |
 
 **Strategy return** (GW1 build → weekly policy-gated transfers → XI + captain):
-2,232 points on 2024/25 (+348 against holding the GW1 squad) and 2,267 on 2023/24
-(+328). Both above the overall average of roughly 2,030–2,100, both below top-10k
-pace of roughly 2,450.
+under real matchday rules (automatic substitutions + vice-captain fallback)
+**2,288 points on 2024/25** (+387 against holding the GW1 squad) and **2,366 on
+2023/24** (+394). The legacy no-autosub scores — 2,232 and 2,267 — are still
+reported for comparability with earlier claims. Both above the overall average
+of roughly 2,030–2,100, both below top-10k pace of roughly 2,450.
+
+**Ablation ladder** ([eval/ablation-report.md](eval/ablation-report.md)):
+`ppg → +fixtures → +minutes → full → full-greedy`, all arms through the same
+season loop and scorer, evidence as paired per-GW differences with a seeded
+bootstrap 90% CI. The whole ladder — `ppg → full` — earns +187 (2024/25, CI
+[+1.0, +8.7] per GW) and +238 (2023/24, CI [+2.1, +10.3]): the model's edge
+over naive PPG is real on both seasons. Individual rungs are mostly within
+noise on single seasons (only `+minutes → full` clears its CI, on 2023/24),
+and threshold-free greedy transfers flip sign by season (+44/−46) — the
+maximin case for keeping the policy gate.
 
 **Named decisions the replay got right:** switched captaincy permanently to Salah
 from GW11, three weeks before the official archive calls GW14 the turning point;
@@ -474,13 +495,12 @@ Salah on the GW24 double with sound expected value (actual 29 → 87 chip points
 ranked Bowen the top GW38 captain on form and fixture (actual 13, beating every
 premium).
 
-**What this does not prove.** The simulation includes no chips and no automatic
-substitutions — the same handicap applies to both arms, so the comparison is fair,
-but the absolute total is a *strategy replay score*, not a claim that this manager
-would have finished on 2,232 points. Real managers gain roughly 30–60 points from
-chips. The baseline is also weak: "better than holding the GW1 squad" does not
-decompose which component earned the edge. An ablation ladder is the top open
-methodological item ([§12](#12-roadmap)).
+**What this does not prove.** The simulation still includes no chips (real
+managers gain roughly 30–60 points from them), the historical archive carries
+no injury flags (the replay assumes availability), and two seasons is a small
+sample — the ablation CIs quantify that rather than remove it. The absolute
+total is a *strategy replay score*, not a claim that this manager would have
+finished on 2,288 points.
 
 The suite has caught five real bugs before they reached anyone: an early-season
 NaN collapse, NaN poisoning in the blend, substring name matching, a selling-price
@@ -495,59 +515,82 @@ after any model change.
 Stated plainly, because a system that hides these is more dangerous than one that
 underperforms.
 
-- **Cold start is the weakest point.** New signings and promoted players are
-  essentially a price prior until roughly GW3. Mitigated by mandatory uncertainty
-  flags and signals, not by the model.
-- **Scoring-regime drift.** Defensive contributions arrived in 2025/26, assist
-  rules changed, and BPS changed again for 2026/27. Seasons are never pooled, but
-  prior-season PPG still feeds the cold-start prior across a rule change. There is
-  no explicit `rules_version` feature.
-- **Minutes modelling is reactive.** Rolling minutes × injury flags cannot
-  anticipate rotation, European fixtures or managed minutes; signals are the only
-  forward-looking input, so a missed press conference is a real failure mode. It
-  emits a single `xmins` rather than a P(start)/P(60)/P(bench) distribution.
-- **`P(CS) = exp(−xGC/90)`** assumes Poisson goals and independence across a
-  double's two matches. Fine for ranking, understates tail variance.
-- **Uncertainty is a calibrated normal approximation.** FPL returns are strongly
-  non-normal (a lot of 2s and a rare 15). Adequate for captain framing; unsuitable
-  for tail probabilities or precise chip expected values. Monte Carlo is the right
-  answer and is not built.
-- **Small point sources are unmodelled**: yellow and red cards, own goals, penalty
-  misses and saves. Individually minor, collectively relevant when the system is
-  choosing between 5.8 and 5.6 EP.
-- **xG and xA are mapped to FPL goals and assists directly**, though FPL's assist
-  definition is broader than standard xA.
-- **Chips are flagged, not optimised.** The system cannot answer "use Triple
-  Captain now or hold it for a likely later double".
-- **Ownership never enters EP** — it is context and reporting only. There is no
-  rank-aware mode, so a manager at 50k and one at 2m get the same advice.
+- **Cold start is still the weakest point.** New signings and promoted players
+  are essentially a price prior until roughly GW3. Mitigated — not solved — by
+  rules-aware priors, mandatory uncertainty flags at every price point, and
+  structured signals.
+- **Scoring-regime drift is now downweighted, not modelled.** `RULES_VERSION`
+  maps seasons to rule generations and shifts the cold-start prior from realized
+  PPG toward rule-independent process stats across a boundary (0.5 → 0.35). The
+  0.35 weight is a conservative pick that cannot be validated until the new
+  regime has real gameweeks; the ablation suite is the tool for revisiting it.
+- **Minutes modelling is still reactive.** The model now emits a
+  P(start)/P(60)/P(bench) distribution with an uncertainty spread, and signals
+  carry a structured role vocabulary (`expected_starter`, `managed_minutes`,
+  `not_in_predicted_xi`, …) — but the inputs remain rolling minutes, injury
+  flags, and research. A missed press conference is still a real failure mode;
+  nothing anticipates rotation the news has not hinted at.
+- **`P(CS) = exp(−xGC/90)` assumes Poisson goals**, and the Monte Carlo engine
+  *explicitly inherits* that assumption — simulation made it stochastic, not
+  better. Doubles are treated as one aggregate exposure, which slightly
+  understates per-match clean sheets. A correlated-scoreline model
+  (Dixon-Coles) is the genuine fix and is not built.
+- **Tail probabilities now come from Monte Carlo** (captaincy: median, p10/p90,
+  haul/blank). The normal ep_sd band still backs the report's p10–p90 columns
+  and remains a rough approximation there.
+- **Small point sources are simulated, not predicted**: cards, own goals and
+  penalty events enter the Monte Carlo tails at league-ballpark rates, but
+  per-player discipline (a Casemiro yellow rate) is not modelled and the EP
+  mean ignores them entirely.
+- **xG and xA are mapped to FPL goals and assists directly**, though FPL's
+  assist definition is broader than standard xA.
+- **Chip EV covers Triple Captain and Bench Boost only**, computed *given*
+  double/blank scenarios the agent supplies from research (plus a decaying
+  default prior). Free Hit and Wildcard remain structural advice; nothing
+  optimises a chip route across the whole season.
+- **Ownership enters captaincy only.** `safe` / `balanced` / `chase` modes can
+  hand the armband to a close differential, but transfers and squad structure
+  are ownership-blind, and effective ownership (top-10k) has no data source.
 - **The transfer horizon is five gameweeks of expected points.** It does not
-  optimise team value, future purchasing power, price trajectory, or a route into
-  a future premium.
+  optimise team value, future purchasing power, or a route into a future
+  premium. Price-change timing advice exists, but it decorates moves the model
+  already wants rather than planning around the market.
 - **Set-piece duty is a flat bonus**, not a modelled penalty rate.
 - **FWD and premium ranking is weakest** (ρ ≈ 0.24); treat single-gameweek premium
   comparisons as near-ties.
 - **The replay assumes availability**, since the historical archive carries no
-  injury flags.
-- **Price-change prediction is not implemented**, despite FPL now exposing it.
+  injury flags. The autosub-aware totals inherit this: a player the real manager
+  knew was injured stays in the replay XI and scores zero.
+- **`price_change_percent` semantics are assumed** (signed progress toward
+  tonight's move) — the field was all-zero preseason, so the sign convention is
+  unverified until the market opens. Thresholds are set where being wrong is
+  cheap.
 
 ---
 
 ## 12. Roadmap
 
-Ordered by expected value, kept honest by the same eval suite.
+Ordered by expected value, kept honest by the same eval suite. The 2026-08
+upgrade landed the previous roadmap's eight items (ablation ladder, autosubs,
+probabilistic minutes, Monte Carlo, chip EV, strategy modes, price-predictor
+ingestion, `rules_version`); what remains:
 
-1. **Ablation ladder** — baseline PPG → +fixtures → +minutes → +components →
-   +policy → full, so the edge is attributable rather than assumed.
-2. **Automatic substitutions in the strategy simulation**, making the headline
-   total a real FPL number.
-3. **Probabilistic minutes** — P(start), P(60), P(bench) instead of one `xmins`,
-   with the agent supplying structured evidence rather than a numerical knob.
-4. **Monte Carlo outcomes**, scoped first to captaincy and chips where tails matter.
-5. **Chip expected-value optimiser** rather than window flagging.
-6. **Rank-aware mode** using ownership and effective ownership.
-7. **Price Change Predictor ingestion** for transfer timing and value protection.
-8. **`rules_version` regime features** on the cold-start prior.
+1. **A correlated-scoreline goal model** (Dixon-Coles or similar) so clean
+   sheets and concessions stop being independent Poissons — the biggest
+   remaining modelling approximation.
+2. **Empirical threshold calibration** — the FT/hit bars and the cross-regime
+   PPG weight (0.35) are conservative picks; the ablation harness can now
+   measure them.
+3. **Modelled set-piece rates** (penalty share × expected penalty events)
+   replacing the flat bonus.
+4. **Assist-definition calibration** — historical FPL-assist-over-xA residuals
+   by player and team.
+5. **Multi-GW transfer routes** — team value, purchasing power, and planned
+   paths into premiums, beyond the five-GW EP horizon.
+6. **Rank-aware transfers** — extend `chase` beyond the armband once an
+   effective-ownership source exists.
+7. **Forward-test accumulation** — `phase3_prereg.py score` is live; the
+   2026/27 season is the first uncontaminated measurement of the whole system.
 
 ---
 
@@ -568,3 +611,8 @@ All constants live in `config.py` with the evidence for their value beside them.
 | `MAX_TRANSFER_SEARCH` | 6 | Covers five banked transfers plus a hit |
 | `PRICE_CHANGE_TZ` | Europe/London | Changes land at 00:00 UK local, not a fixed UTC hour |
 | FT / hit thresholds | 2.0 / 6.0 EP, dynamically scaled | Conservative; empirical calibration is a roadmap item |
+| `PPG_PRIOR_WEIGHT` / `_CROSS_REGIME` | 0.5 / 0.35 | Cross-regime prior leans on process stats; 0.35 is unvalidatable before GW1, revisit via ablation |
+| `PRICE_MOVE_IMMINENT` / `_WATCH` | 90 / 60 % | Timing nudges only on moves the model already wants — cheap if the field's semantics surprise |
+| `CHASE_EP_TOLERANCE` | 1.0 EP | Max EP a differential armband may cost in chase mode |
+| `CHIP_PLAY_MARGIN` | 1.15 | Chips are one-shot options; ties go to holding |
+| `DEFAULT_DOUBLE_PROB` / `_LAST_GW` | 0.8 / GW30 | Unresearched-double prior; silence after GW30 means none |
