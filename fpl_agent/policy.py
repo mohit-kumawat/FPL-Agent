@@ -332,6 +332,10 @@ def chip_advice(boot: dict, xi_result: dict | None, chips_available: list[str],
     gw = int(nxt["id"])
     windows = rules.chip_windows(boot)
     playable = rules.playable_now(chips_available, gw, windows)
+    # never present assumed windows as if they came from the API
+    assumed = ("" if rules.windows_are_live(boot)
+               else " [DATA] chip windows are ASSUMED (bootstrap carried no "
+                    "`chips` block) — verify the window before playing.")
 
     def label(family: str) -> str:
         half = rules.chip_half(family, gw, windows)
@@ -423,6 +427,8 @@ def chip_advice(boot: dict, xi_result: dict | None, chips_available: list[str],
                      "gameweek, not on EV; supply blank scenarios via signals for a number.")
     if winner is not None and len(scored) > 1:
         notes.append("[DATA] Only one chip may be played per gameweek.")
+    if assumed and notes:
+        notes.append(assumed.strip())
     return notes
 
 

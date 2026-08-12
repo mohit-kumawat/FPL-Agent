@@ -52,18 +52,32 @@ def verify_state(boot: dict, squad: dict, fixtures: list[dict],
     # ---- 1b. is the game still scored the way the model thinks? ---------
     # bootstrap publishes the live scoring table; if FPL tweaks a value
     # mid-season, every projection silently drifts. Warn, never block.
-    drift = rules.check_scoring(boot, models.GOAL_PTS, models.CS_PTS, models.DC_POINTS)
+    drift = rules.check_scoring(boot, models.SCORING_EXPECTED)
     for d in drift:
         warnings.append(f"SCORING RULE DRIFT — {d} (update fpl_agent/models.py; "
                         "projections are wrong until you do)")
     if not drift and rules.live_scoring(boot):
-        checks.append("scoring table matches the model (goals, CS, DC, cards, "
-                      "appearance, saves, penalties)")
+        # Scope the claim to what the payload actually lets us compare: the
+        # per-unit values. The API never publishes the divisors the model
+        # applies, so a change to "1 point per 3 saves" would pass silently.
+        checks.append("scoring values the API publishes match the model "
+                      "(per-position goals, clean sheets, goals conceded, "
+                      "defensive contribution; assists, cards, appearance, "
+                      "penalties, bonus). NOT verifiable from the API: "
+                      + "; ".join(rules.UNVERIFIABLE_RULES))
     chip_w = rules.chip_windows(boot)
     if chip_w:
-        checks.append("chip windows from API: " + "; ".join(
+        live = rules.windows_are_live(boot)
+        summary = "; ".join(
             f"{rules.CHIP_LABELS[f]} " + ",".join(f"GW{a}-{b}" for a, b in w)
-            for f, w in chip_w.items() if f in rules.CHIP_LABELS))
+            for f, w in chip_w.items() if f in rules.CHIP_LABELS)
+        if live:
+            checks.append(f"chip windows from API: {summary}")
+        else:
+            warnings.append(
+                "bootstrap carries no `chips` block — chip windows fall back to "
+                f"hardcoded {config.CURRENT_SEASON} values ({summary}); chip advice "
+                "is assumed, not read from the API")
     if not fixtures:
         warnings.append("fixtures list empty")
     strengths = [t.get(k, 0) for t in boot.get("teams", [])

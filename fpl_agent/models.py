@@ -218,6 +218,8 @@ def model_b_ridge_inseason(panel: pd.DataFrame) -> pd.Series:
 # ------------------------------------------------------ component model
 GOAL_PTS = {1: 10, 2: 6, 3: 5, 4: 4}     # 2025/26+ scoring (GK goal = 10)
 CS_PTS = {1: 4, 2: 4, 3: 1, 4: 0}
+# Only GKP and DEF lose points for concessions, at -1 per CONCESSIONS_PER_POINT.
+GC_POINTS = {1: -1.0, 2: -1.0, 3: 0.0, 4: 0.0}
 # Defensive contribution (2025/26+): 2 points, capped, at 10 CBIT for defenders
 # and 12 including recoveries for midfielders and forwards. GOALKEEPERS EARN
 # NOTHING HERE — game_config.scoring.defensive_contribution is 0 for GKP, and
@@ -225,6 +227,45 @@ CS_PTS = {1: 4, 2: 4, 3: 1, 4: 0}
 # drift in these values on every run.
 DC_POINTS = {1: 0.0, 2: 2.0, 3: 2.0, 4: 2.0}
 DC_THRESHOLD = {1: 12, 2: 10, 3: 12, 4: 12}
+
+# Every remaining scoring value the model applies, named once so the drift check
+# compares the API against what the code ACTUALLY uses rather than against a
+# second copy of the same literals. Anything hardcoded at a use site is invisible
+# to rules.check_scoring, so keep new values here.
+ASSIST_PTS = 3.0
+APPEARANCE_SHORT_PTS = 1.0        # played, under 60 minutes
+APPEARANCE_LONG_PTS = 2.0         # reached 60 minutes
+PEN_SAVE_PTS = 5.0
+PEN_MISS_PTS = -2.0
+OWN_GOAL_PTS = -2.0
+YELLOW_PTS = -1.0
+RED_PTS = -3.0
+BONUS_PER_POINT = 1.0
+MAX_BONUS = 3.0
+# Divisors the API does NOT publish: it exposes the per-unit value (saves 1,
+# goals conceded -1) but not how many events earn it. Drift here is undetectable
+# from the payload, which is why rules.UNVERIFIABLE_RULES names them.
+SAVES_PER_POINT = 3.0
+CONCESSIONS_PER_POINT = 2.0
+
+# api scoring key -> what the model uses. Per-position tables are dicts keyed by
+# element_type; the rest are scalars.
+SCORING_EXPECTED: dict[str, object] = {
+    "goals_scored": GOAL_PTS,
+    "clean_sheets": CS_PTS,
+    "goals_conceded": GC_POINTS,
+    "defensive_contribution": DC_POINTS,
+    "assists": ASSIST_PTS,
+    "short_play": APPEARANCE_SHORT_PTS,
+    "long_play": APPEARANCE_LONG_PTS,
+    "penalties_saved": PEN_SAVE_PTS,
+    "penalties_missed": PEN_MISS_PTS,
+    "own_goals": OWN_GOAL_PTS,
+    "yellow_cards": YELLOW_PTS,
+    "red_cards": RED_PTS,
+    "bonus": BONUS_PER_POINT,
+    "saves": 1.0,          # per-unit only; SAVES_PER_POINT is unverifiable
+}
 
 
 def component_frame(df: pd.DataFrame) -> pd.DataFrame:
@@ -243,19 +284,20 @@ def component_frame(df: pd.DataFrame) -> pd.DataFrame:
         return pd.to_numeric(df[col], errors="coerce").fillna(0.0) * 90 / m
 
     gp = df["element_type"].map(GOAL_PTS)
-    attack90 = p90("expected_goals") * gp + p90("expected_assists") * 3
+    attack90 = p90("expected_goals") * gp + p90("expected_assists") * ASSIST_PTS
 
     xgc90 = p90("expected_goals_conceded").clip(0.2, 4.0)
     p_cs = np.exp(-xgc90)                       # Poisson P(0 conceded)
     cs90 = p_cs * df["element_type"].map(CS_PTS)
-    # GK/DEF lose 1 pt per 2 conceded
-    gc90 = -(xgc90 / 2.0).where(df["element_type"].isin([1, 2]), 0.0)
+    # GK/DEF lose 1 pt per 2 conceded; MID/FWD lose nothing (GC_POINTS)
+    gc90 = (df["element_type"].map(GC_POINTS) * xgc90 / CONCESSIONS_PER_POINT)
 
     dc90 = p90("defensive_contribution")
     dc_pts90 = (df["element_type"].map(DC_POINTS)
                 * (dc90 / df["element_type"].map(DC_THRESHOLD)).clip(0, 1) * 0.85)
 
-    neutral90 = p90("bonus") + p90("saves") / 3.0 + dc_pts90 + gc90
+    neutral90 = (p90("bonus") * BONUS_PER_POINT
+                 + p90("saves") / SAVES_PER_POINT + dc_pts90 + gc90)
     return pd.DataFrame({"attack90": attack90, "cs90": cs90, "neutral90": neutral90})
 
 

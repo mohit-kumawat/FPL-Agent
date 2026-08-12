@@ -35,7 +35,7 @@ and produces recommendations for a human to act on.
 |---|---|
 | Docs | This file (full reference) · [AGENT.md](AGENT.md) (agent runbook) · [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Evidence | [eval/2024-25-report.md](eval/2024-25-report.md) · [eval/strategy-sim-report.md](eval/strategy-sim-report.md) · [eval/ablation-report.md](eval/ablation-report.md) |
-| Tests | `uv run pytest -q` (129 offline tests) · `uv run python eval/run_backtests.py` (replay suite) |
+| Tests | `uv run pytest -q` (136 offline tests) · `uv run python eval/run_backtests.py` (replay suite) |
 | Licence | MIT |
 
 *The rest of this file is the complete technical reference: exactly what the code
@@ -448,7 +448,7 @@ uv run fpl rate                   # grade squad.yaml against optimal
 uv run fpl pending [list|add <text>|done <substr>]
 uv run fpl backtest               # model A/B/ensemble, out-of-sample
 uv run fpl refresh                # force re-fetch
-uv run pytest -q                  # 129 offline tests, no network
+uv run pytest -q                  # 136 offline tests, no network
 uv run python eval/run_backtests.py    # point-in-time replay suite
 uv run python eval/strategy_sim.py     # full-season strategy return
 uv run python eval/ablation.py         # ablation ladder + bootstrap CIs
@@ -649,6 +649,14 @@ The scoring table and chip windows are published by the API in
 the chip windows live (they change shape between seasons) and, on every run,
 compares the model's scoring constants against the live table — any mismatch
 becomes a loud verification warning rather than a quietly wrong projection. The
+check reads `models.SCORING_EXPECTED`, so it compares the API against the values
+the code actually applies rather than a second copy of them. Two rules cannot be
+checked at all, because the API publishes the per-unit value but not the divisor:
+saves-per-point (3) and concessions-per-point (2). Those are named in
+`rules.UNVERIFIABLE_RULES` and the verification line says so rather than implying
+they were verified. If a payload arrives without a `chips` block, chip windows
+fall back to hardcoded values and both the report and the chip advice say they
+are assumed. The
 constants themselves stay static because a replay of 2023/24 must be scored under
 2023/24's rules. `RULES_VERSION` records which rule generation each season
 belongs to; 2026/27 is generation 3 (BPS rework).

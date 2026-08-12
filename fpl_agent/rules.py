@@ -46,48 +46,69 @@ def live_scoring(boot: dict) -> dict[str, Any]:
     return ((boot.get("game_config") or {}).get("scoring") or {}) if boot else {}
 
 
-def check_scoring(boot: dict, goal_pts: dict[int, float], cs_pts: dict[int, float],
-                  dc_points: dict[int, float]) -> list[str]:
-    """Compare the model's static scoring constants against the live table.
+# Rules the model applies that the API does NOT publish, so drift in them is
+# undetectable from the payload. Named so the operator is never told these were
+# verified: the API exposes the per-unit value (saves 1, goals conceded -1) but
+# never how many events earn it.
+UNVERIFIABLE_RULES = (
+    "saves per point (model: 3)",
+    "concessions per point (model: 2)",
+)
 
-    Returns human-readable mismatches. Empty means the model is scoring the
-    game the API says is being played. Absent/partial API data returns nothing
-    rather than false alarms — this is a tripwire, never a blocker.
+# Readable names for the api scoring keys the check compares.
+_SCORING_LABELS = {
+    "goals_scored": "goal points",
+    "clean_sheets": "clean-sheet points",
+    "goals_conceded": "goals-conceded points",
+    "defensive_contribution": "defensive-contribution points",
+    "assists": "assist points",
+    "bonus": "bonus per point",
+    "penalties_saved": "penalty-save points",
+    "penalties_missed": "penalty-miss points",
+    "yellow_cards": "yellow-card points",
+    "red_cards": "red-card points",
+    "own_goals": "own-goal points",
+    "saves": "points per save unit",
+    "short_play": "sub-60' appearance points",
+    "long_play": "60'+ appearance points",
+}
+
+
+def check_scoring(boot: dict, expected: dict[str, object]) -> list[str]:
+    """Compare the live scoring table against what the MODEL actually uses.
+
+    `expected` is models.SCORING_EXPECTED: api key -> per-position dict or
+    scalar, sourced from the constants the code applies. Passing the model's own
+    values (rather than a second copy of the same literals) is the point — a
+    checker with its own hardcoded numbers cannot see the model drift away.
+
+    Returns human-readable mismatches. Empty means the model scores the game the
+    API says is being played, EXCEPT for UNVERIFIABLE_RULES. Absent/partial API
+    data returns nothing rather than false alarms: a tripwire, never a blocker.
     """
     scoring = live_scoring(boot)
     if not scoring:
         return []
     problems: list[str] = []
-
-    def compare(api_key: str, static: dict[int, float], label: str) -> None:
-        table = scoring.get(api_key)
-        if not isinstance(table, dict):
-            return
-        for pos, key in POS_KEY.items():
-            if key not in table:
+    for api_key, mine in expected.items():
+        if api_key not in scoring:
+            continue
+        live = scoring[api_key]
+        label = _SCORING_LABELS.get(api_key, api_key)
+        if isinstance(mine, dict):
+            if not isinstance(live, dict):
                 continue
-            live = float(table[key])
-            mine = float(static.get(pos, 0.0))
-            if abs(live - mine) > 1e-9:
-                problems.append(f"{label} for {key}: API says {live:g}, model uses {mine:g}")
-
-    compare("goals_scored", goal_pts, "goal points")
-    compare("clean_sheets", cs_pts, "clean-sheet points")
-    compare("defensive_contribution", dc_points, "defensive-contribution points")
-    for api_key, mine, label in (("assists", 3.0, "assist points"),
-                                 ("bonus", 1.0, "bonus per point"),
-                                 ("penalties_saved", 5.0, "penalty-save points"),
-                                 ("penalties_missed", -2.0, "penalty-miss points"),
-                                 ("yellow_cards", -1.0, "yellow-card points"),
-                                 ("red_cards", -3.0, "red-card points"),
-                                 ("own_goals", -2.0, "own-goal points"),
-                                 ("saves", 1.0, "points per save unit"),
-                                 ("short_play", 1.0, "sub-60' appearance points"),
-                                 ("long_play", 2.0, "60'+ appearance points")):
-        if api_key in scoring and isinstance(scoring[api_key], (int, float)):
-            live = float(scoring[api_key])
-            if abs(live - mine) > 1e-9:
-                problems.append(f"{label}: API says {live:g}, model uses {mine:g}")
+            for pos, key in POS_KEY.items():
+                if key not in live:
+                    continue
+                if abs(float(live[key]) - float(mine.get(pos, 0.0))) > 1e-9:
+                    problems.append(f"{label} for {key}: API says "
+                                    f"{float(live[key]):g}, model uses "
+                                    f"{float(mine.get(pos, 0.0)):g}")
+        elif isinstance(live, (int, float)) and not isinstance(live, bool):
+            if abs(float(live) - float(mine)) > 1e-9:
+                problems.append(f"{label}: API says {float(live):g}, "
+                                f"model uses {float(mine):g}")
     return problems
 
 

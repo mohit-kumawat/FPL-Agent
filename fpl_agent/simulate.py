@@ -28,7 +28,11 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .models import CS_PTS, DC_POINTS, DC_THRESHOLD, GOAL_PTS
+from .models import (APPEARANCE_LONG_PTS, APPEARANCE_SHORT_PTS, ASSIST_PTS,
+                     CONCESSIONS_PER_POINT, CS_PTS, DC_POINTS,
+                     DC_THRESHOLD, GOAL_PTS, MAX_BONUS, OWN_GOAL_PTS,
+                     PEN_MISS_PTS, PEN_SAVE_PTS, RED_PTS, SAVES_PER_POINT,
+                     YELLOW_PTS)
 
 SEED = 20260812
 N_TRIALS = 2000
@@ -102,12 +106,13 @@ def simulate_players(ep: pd.DataFrame, n_trials: int = N_TRIALS,
     p_play_a = np.clip(p_start + p_bench, 0, 1)
     e_app = (p_play_a + p_60) * n_fx
     e_goals = xg90 * xmins * n_fx * per_fx_att * goal_pts
-    e_assists = xa90 * xmins * n_fx * per_fx_att * 3.0
+    e_assists = xa90 * xmins * n_fx * per_fx_att * ASSIST_PTS
     e_cs = p_60 * np.exp(-xgc90 * n_fx / per_fx_def) * cs_pts
-    e_gc = -np.where(is_gk_def, xgc90 * xmins * n_fx / per_fx_def / 2.0, 0.0)
-    e_saves = np.where(is_gk, saves90 * xmins * n_fx / 3.0, 0.0)
+    e_gc = -np.where(is_gk_def,
+                     xgc90 * xmins * n_fx / per_fx_def / CONCESSIONS_PER_POINT, 0.0)
+    e_saves = np.where(is_gk, saves90 * xmins * n_fx / SAVES_PER_POINT, 0.0)
     e_dc = dc_pts * n_fx * p_dc * xmins
-    e_bonus = np.clip(bonus90, 0, 3) * xmins * n_fx
+    e_bonus = np.clip(bonus90, 0, MAX_BONUS) * xmins * n_fx
     e_scalable = e_goals + e_assists + e_saves + e_dc + e_bonus
     e_fixed = e_app + e_cs + e_gc
     target = ep["ep_next"].to_numpy() - ep.get("sp_bonus", pd.Series(0.0, index=ep.index)).to_numpy()
@@ -145,30 +150,37 @@ def simulate_players(ep: pd.DataFrame, n_trials: int = N_TRIALS,
 
     pts = np.zeros((P, n_trials))
     plays = minutes > 0
-    pts += (plays * 1.0 + sixty * 1.0) * n_fx[:, None]    # appearance points
+    # appearance: SHORT for playing at all, topped up to LONG at 60'
+    pts += (plays * APPEARANCE_SHORT_PTS
+            + sixty * (APPEARANCE_LONG_PTS - APPEARANCE_SHORT_PTS)) * n_fx[:, None]
 
     # ---- attacking returns --------------------------------------------------
     pts += rng.poisson(xg90[:, None] * exposure * per_fx_att[:, None]) * goal_pts[:, None]
-    pts += rng.poisson(xa90[:, None] * exposure * per_fx_att[:, None]) * 3.0
+    pts += rng.poisson(xa90[:, None] * exposure * per_fx_att[:, None]) * ASSIST_PTS
 
     # ---- defensive returns --------------------------------------------------
     conceded = rng.poisson(xgc90[:, None] * exposure / per_fx_def[:, None])
     pts += (sixty & (conceded == 0)) * cs_pts[:, None]
-    pts -= np.where(is_gk_def[:, None], conceded // 2, 0)
+    pts -= np.where(is_gk_def[:, None],
+                    conceded // int(CONCESSIONS_PER_POINT), 0)
     pts += np.where(is_gk[:, None],
-                    rng.poisson(saves90[:, None] * exposure) // 3, 0)
+                    rng.poisson(saves90[:, None] * exposure)
+                    // int(SAVES_PER_POINT), 0)
     pts += dc_pts[:, None] * rng.binomial(
         n_fx[:, None].astype(int),
         np.clip(p_dc[:, None] * (minutes / 90.0), 0, 1))
 
     # ---- bonus + small point sources ---------------------------------------
-    pts += np.minimum(rng.poisson(np.clip(bonus90[:, None], 0, 3) * exposure),
-                      3 * n_fx[:, None])
-    pts -= 1.0 * (rng.random((P, n_trials)) < YELLOW_P90 * exposure)
-    pts -= 3.0 * (rng.random((P, n_trials)) < RED_P90 * exposure)
-    pts -= 2.0 * (rng.random((P, n_trials)) < OWN_GOAL_P90 * exposure)
-    pts -= 2.0 * (pen_taker[:, None] & (rng.random((P, n_trials)) < PEN_MISS_P90 * exposure))
-    pts += 5.0 * (is_gk[:, None] & (rng.random((P, n_trials)) < PEN_SAVE_P90 * exposure))
+    pts += np.minimum(
+        rng.poisson(np.clip(bonus90[:, None], 0, MAX_BONUS) * exposure),
+        MAX_BONUS * n_fx[:, None])
+    pts += YELLOW_PTS * (rng.random((P, n_trials)) < YELLOW_P90 * exposure)
+    pts += RED_PTS * (rng.random((P, n_trials)) < RED_P90 * exposure)
+    pts += OWN_GOAL_PTS * (rng.random((P, n_trials)) < OWN_GOAL_P90 * exposure)
+    pts += PEN_MISS_PTS * (pen_taker[:, None]
+                           & (rng.random((P, n_trials)) < PEN_MISS_P90 * exposure))
+    pts += PEN_SAVE_PTS * (is_gk[:, None]
+                           & (rng.random((P, n_trials)) < PEN_SAVE_P90 * exposure))
 
     q = np.percentile(pts, [10, 50, 90], axis=1)
     return pd.DataFrame({

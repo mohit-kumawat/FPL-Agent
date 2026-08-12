@@ -41,8 +41,7 @@ BOOT = {"game_config": {"scoring": LIVE_SCORING}, "chips": LIVE_CHIPS,
 
 # ------------------------------------------------------------------- scoring
 def test_model_scoring_matches_the_published_table():
-    assert rules.check_scoring(BOOT, models.GOAL_PTS, models.CS_PTS,
-                               models.DC_POINTS) == []
+    assert rules.check_scoring(BOOT, models.SCORING_EXPECTED) == []
 
 
 def test_goalkeepers_earn_no_defensive_contribution_points():
@@ -53,15 +52,41 @@ def test_goalkeepers_earn_no_defensive_contribution_points():
 
 
 def test_drift_in_any_scoring_value_is_reported():
-    wrong_dc = dict(models.DC_POINTS) | {1: 2.0}
-    wrong_goals = dict(models.GOAL_PTS) | {1: 6}
-    found = " ".join(rules.check_scoring(BOOT, wrong_goals, models.CS_PTS, wrong_dc))
+    expected = dict(models.SCORING_EXPECTED)
+    expected["defensive_contribution"] = dict(models.DC_POINTS) | {1: 2.0}
+    expected["goals_scored"] = dict(models.GOAL_PTS) | {1: 6}
+    found = " ".join(rules.check_scoring(BOOT, expected))
     assert "defensive-contribution points for GKP" in found
     assert "goal points for GKP" in found
 
 
+def test_goals_conceded_drift_is_reported():
+    """Regression: goals_conceded was omitted from the comparison entirely, so
+    midfielders starting to lose points for concessions passed unnoticed."""
+    sc = dict(LIVE_SCORING)
+    sc["goals_conceded"] = {"GKP": -1, "DEF": -1, "MID": -1, "FWD": 0}
+    found = " ".join(rules.check_scoring({**BOOT, "game_config": {"scoring": sc}},
+                                         models.SCORING_EXPECTED))
+    assert "goals-conceded points for MID" in found
+
+
+def test_scalar_drift_on_the_MODEL_side_is_reported():
+    """Regression: scalars were compared against literals inside the checker, so
+    editing the model's value left the tripwire reporting no drift."""
+    expected = dict(models.SCORING_EXPECTED) | {"assists": 4.0}
+    found = " ".join(rules.check_scoring(BOOT, expected))
+    assert "assist points" in found and "model uses 4" in found
+
+
+def test_unverifiable_rules_are_named_not_claimed():
+    """The API publishes per-unit values but not the divisors the model applies,
+    so those must be declared unverifiable rather than reported as checked."""
+    joined = " ".join(rules.UNVERIFIABLE_RULES)
+    assert "saves per point" in joined and "concessions per point" in joined
+
+
 def test_missing_game_config_is_silent_not_noisy():
-    assert rules.check_scoring({}, models.GOAL_PTS, models.CS_PTS, models.DC_POINTS) == []
+    assert rules.check_scoring({}, models.SCORING_EXPECTED) == []
 
 
 def test_keeper_dc_column_cannot_add_points():
@@ -238,3 +263,51 @@ def test_simulator_gives_keepers_no_dc_points():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# --------------------------------------------------- calibration retry (fix 1)
+_CAL_FX = [{"event": 5, "kickoff_time": "2026-09-20T15:30:00Z"}]   # Sunday 16:30
+_CAL_BOOT = {"events": [
+    {"id": 5, "finished": True, "deadline_time": "2026-09-19T11:00:00Z"},
+    {"id": 6, "is_next": True, "is_current": False, "finished": False,
+     "deadline_time": "2099-09-26T11:00:00Z"}]}
+
+
+_SUNDAY_EVE = datetime(2026, 9, 20, 20, 0, tzinfo=timezone.utc)
+_MONDAY_AM = datetime(2026, 9, 21, 9, 30, tzinfo=timezone.utc)
+
+
+def test_pending_calibration_is_empty_before_the_lockdown():
+    """Sunday evening: the gameweek is finished but points are not final yet."""
+    from fpl_agent import daily as daily_mod
+    assert daily_mod.pending_calibration(_CAL_BOOT, _CAL_FX, {},
+                                         now=_SUNDAY_EVE) == []
+
+
+def test_pending_calibration_finds_the_gameweek_once_points_are_final():
+    """Monday: new_gw_finished is False, so this is the ONLY thing that can
+    re-trigger the calibration that Sunday's run deferred."""
+    from fpl_agent import daily as daily_mod
+    assert daily_mod.pending_calibration(_CAL_BOOT, _CAL_FX, {},
+                                         now=_MONDAY_AM) == [5]
+
+
+def test_a_scored_gameweek_is_not_calibrated_twice():
+    from fpl_agent import daily as daily_mod
+    assert daily_mod.pending_calibration(
+        _CAL_BOOT, _CAL_FX, {"scored_gws": [5]}, now=_MONDAY_AM) == []
+
+
+def test_pending_calibration_triggers_a_retrain():
+    """Regression: without this trigger a deferred gameweek was never scored,
+    because full_retrain only ever fired on the day the gameweek finished."""
+    from fpl_agent import daily as daily_mod
+    changes = {"first_run": False, "new_gw_finished": False,
+               "status_changes": [], "news_changes": [], "price_changes": [],
+               "gw_state": {"gws_finished": 5}}
+    boot = {"events": [{"id": 6, "is_next": True, "is_current": False,
+                        "finished": False, "deadline_time": "2099-09-26T11:00:00Z"}]}
+    work = daily_mod.decide_work(changes, boot, {"players": []},
+                                 has_signals=False, pending_gws=[5])
+    assert work["models"] and work["full_retrain"]
+    assert any("points now final" in t for t in work["triggers"])

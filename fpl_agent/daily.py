@@ -22,8 +22,28 @@ def _hours_to_deadline(boot: dict) -> float | None:
     return (dl - datetime.now(timezone.utc)).total_seconds() / 3600
 
 
+def pending_calibration(boot: dict, fixtures: list[dict], state: dict,
+                        now: datetime | None = None) -> list[int]:
+    """Finished gameweeks whose points are final but which were never scored.
+
+    `new_gw_finished` is edge-triggered on the snapshot diff, so it fires on the
+    day a gameweek finishes — which is usually BEFORE the 09:00 UK lockdown makes
+    the points final. Without this, deferring calibration meant never doing it.
+    """
+    done = {int(g) for g in (state.get("scored_gws") or [])}
+    out = []
+    for ev in boot.get("events", []):
+        gw = int(ev.get("id", 0))
+        if gw in done or not ev.get("finished"):
+            continue
+        if data.gw_points_final(ev, fixtures, now=now)[0]:
+            out.append(gw)
+    return sorted(out)
+
+
 def decide_work(changes: dict, boot: dict, squad: dict, has_signals: bool,
-                target_ids: list[int] | None = None) -> dict:
+                target_ids: list[int] | None = None,
+                pending_gws: list[int] | None = None) -> dict:
     """The trigger matrix. Returns which analyses to run and why.
 
     `target_ids` are the players the STANDING recommendation says to buy (saved
@@ -55,6 +75,11 @@ def decide_work(changes: dict, boot: dict, squad: dict, has_signals: bool,
     if changes.get("new_gw_finished"):
         triggers.append("new GW finished — retrain + calibrate")
         work.update(models=True, optimizer=True, full_retrain=True)
+    if pending_gws:
+        # points went final after the finish-day run deferred them
+        triggers.append(f"GW{','.join(str(g) for g in pending_gws)} points now "
+                        "final — score the stored predictions")
+        work.update(models=True, full_retrain=True)
     if changes["status_changes"] or changes["news_changes"]:
         news = changes["status_changes"] + changes["news_changes"]
         if touches_squad(news):
@@ -138,7 +163,8 @@ def run_daily(force: bool = False) -> dict:
     )
 
     work = decide_work(changes, boot, squad, new_signals,
-                       target_ids=state.get("target_ids") or [])
+                       target_ids=state.get("target_ids") or [],
+                       pending_gws=pending_calibration(boot, fixtures, state))
     stage = lifecycle.status(boot)
 
     ctx: dict[str, Any] = {
@@ -168,25 +194,33 @@ def run_daily(force: bool = False) -> dict:
         if gw_next:
             memoryio.save_predictions(gw_next, ep)
 
-        # calibration when a GW just finished — but only once its points are
-        # FINAL. 2026/27 lockdown is 09:00 UK the day after the last match, so
-        # scoring earlier would bank FPL's own bonus/DC revisions as model error.
-        if work["full_retrain"] and not panel.empty:
-            last_gw = int(panel["round"].max())
-            ev = next((e for e in boot["events"] if e["id"] == last_gw), None)
-            final, why = data.gw_points_final(ev, fixtures)
-            if final:
+        # Calibrate every finished gameweek whose points are FINAL and which has
+        # not been scored yet. 2026/27 lockdown is 09:00 UK the day after the
+        # last match, so scoring earlier would bank FPL's own bonus/DC revisions
+        # as model error — but a deferral has to be retried, hence scored_gws.
+        if not panel.empty:
+            scored_gws = {int(g) for g in (state.get("scored_gws") or [])}
+            for gw_done in sorted(int(r) for r in panel["round"].unique()):
+                if gw_done in scored_gws:
+                    continue
+                ev = next((e for e in boot["events"] if e["id"] == gw_done), None)
+                final, why = data.gw_points_final(ev, fixtures)
+                if not final:
+                    ctx["findings"].append(
+                        f"[DATA] GW{gw_done} calibration deferred — {why}")
+                    continue
                 score = memoryio.score_predictions(
-                    last_gw, panel[panel["round"] == last_gw]
+                    gw_done, panel[panel["round"] == gw_done]
                 )
                 if score:
                     ctx["findings"].append(
-                        f"[MODEL] GW{last_gw} calibration: MAE {score['mae_all']} "
+                        f"[MODEL] GW{gw_done} calibration: MAE {score['mae_all']} "
                         f"(top-50: {score['mae_top50']})"
                     )
-            else:
-                ctx["findings"].append(
-                    f"[DATA] GW{last_gw} calibration deferred — {why}")
+                # mark scored either way: with no stored prediction (a gameweek
+                # from before this squad existed) there is nothing to retry
+                scored_gws.add(gw_done)
+            state["scored_gws"] = sorted(scored_gws)
 
         squad_ids = [p["id"] for p in (squad.get("players") or [])]
         gws_played = int(ep["gws_played"].iloc[0]) if len(ep) else 0
