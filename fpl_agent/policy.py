@@ -321,7 +321,8 @@ def _future_double(scenarios: list[dict] | None, gw: int,
     Scenario facts come from the agent's research (fixture congestion, cup
     runs) via signals; the pipeline only does the arithmetic. With no
     scenarios, a default prior applies while doubles are still plausibly
-    ahead — after DEFAULT_DOUBLE_LAST_GW silence means none.
+    ahead — after DEFAULT_DOUBLE_LAST_GW silence means none. That cutoff governs
+    the PRIOR only; a researched double is never discarded for being late.
 
     `window_end` is the last gameweek the chip being evaluated may still be
     played (`rules.chip_window_end`). A double past it is worth nothing to THIS
@@ -337,28 +338,40 @@ def _future_double(scenarios: list[dict] | None, gw: int,
     play-now must never rest on the default prior alone (see chip_advice's
     dominance test) — a default probability is a model assumption, not evidence.
     """
-    horizon = (DEFAULT_DOUBLE_LAST_GW if window_end is None
-               else min(int(window_end), DEFAULT_DOUBLE_LAST_GW))
+    # Two different horizons, and conflating them throws away research: the
+    # chip's expiry is the only bound on a RESEARCHED double (a real GW34 double
+    # is playable by a chip that lives to GW38), while DEFAULT_DOUBLE_LAST_GW
+    # bounds only the unresearched PRIOR — it says when silence stops meaning
+    # "one is probably still coming", not when doubles stop happening.
+    usable_end = None if window_end is None else int(window_end)
     future = [s for s in (scenarios or [])
-              if s.get("kind") == "double" and gw < int(s.get("gw", 0)) <= horizon]
+              if s.get("kind") == "double" and gw < int(s.get("gw", 0))
+              and (usable_end is None or int(s.get("gw", 0)) <= usable_end)]
     if future:
         best = max(future, key=lambda s: float(s.get("prob", 0)))
         return (float(best.get("prob", 0)),
                 f"[SIGNAL] double expected GW{best['gw']} (p={best.get('prob')})",
                 "signal")
     # which constraint bit: the chip's own expiry, or the season running out
-    clipped = window_end is not None and int(window_end) < DEFAULT_DOUBLE_LAST_GW
-    if gw >= horizon:
-        return 0.0, (f"[MODEL] this chip's window closes at GW{horizon} — no "
+    clipped = usable_end is not None and usable_end < DEFAULT_DOUBLE_LAST_GW
+    if gw > DEFAULT_DOUBLE_LAST_GW or (usable_end is not None and gw >= usable_end):
+        return 0.0, (f"[MODEL] this chip's window closes at GW{usable_end} — no "
                      "gameweek left in it for an unresearched double" if clipped
                      else "[MODEL] season too late for an unresearched double"), "late"
-    reachable = _double_mass(gw + 1, horizon)
-    season = _double_mass(gw + 1, DEFAULT_DOUBLE_LAST_GW)
-    p = round(DEFAULT_DOUBLE_PROB * (reachable / season if season > 0 else 0.0), 2)
-    reach = (f"by GW{horizon}, when this chip expires" if clipped
+    # the prior always reaches at least the next gameweek, so gw == LAST_GW keeps
+    # the full prior rather than collapsing to an empty (and so zero) span
+    season_end = max(DEFAULT_DOUBLE_LAST_GW, gw + 1)
+    prior_end = season_end if usable_end is None else min(usable_end, season_end)
+    reachable = _double_mass(gw + 1, prior_end)
+    season = _double_mass(gw + 1, season_end)
+    # full precision into the arithmetic: rounding here could land on exactly
+    # 0.0, which prior_dependent reads as "no prior to gate" and would let a
+    # model assumption fire a chip. Round for the message only.
+    p = DEFAULT_DOUBLE_PROB * (reachable / season if season > 0 else 0.0)
+    reach = (f"by GW{prior_end}, when this chip expires" if clipped
              else "before season end")
     return p, ("[MODEL] no scenario research yet — assuming a usable double "
-               f"{reach} (p={p})"), "default"
+               f"{reach} (p={p:.2f})"), "default"
 
 
 def chip_advice(boot: dict, xi_result: dict | None, chips_available: list[str],
