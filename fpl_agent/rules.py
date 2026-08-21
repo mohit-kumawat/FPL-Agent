@@ -159,6 +159,21 @@ def chip_half(family: str, gw: int, windows: dict[str, list[tuple[int, int]]]) -
     return None
 
 
+def chip_window_end(family: str, gw: int, windows: dict[str, list[tuple[int, int]]]) -> int | None:
+    """Last gameweek the copy of `family` playable in `gw` may still be used.
+
+    The deadline a held chip is actually racing. 2026/27 splits every family
+    into two copies (GW1/2-19 and GW20-38) and an unused first-half copy expires
+    at the split rather than carrying over, so anything a chip is being held for
+    has to land on or before this gameweek. Read from the same live windows as
+    `chip_half`, never hardcoded — the split moved once and can move again.
+    """
+    half = chip_half(family, gw, windows)
+    if half is None:
+        return None
+    return int(windows[family][half - 1][1])
+
+
 def canonical_chips(chips_available: list[str] | None) -> set[str]:
     """Normalise squad.yaml chip names to `family` + optional half suffix.
 

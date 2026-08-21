@@ -120,11 +120,9 @@ COLD_START_GWS = 8
 # Robustness penalty on expected points (kappa * std of past points)
 ROBUST_KAPPA = 0.0          # off by default; rating card reports variance instead
 
-# Fixture difficulty: expected-points multiplier per FDR value
-# (fallback only — continuous strength-based multipliers are primary, see
-# features.strength_fixture_mult; validated on 2024/25 replay)
-FDR_MULTIPLIER = {1: 1.20, 2: 1.10, 3: 1.00, 4: 0.90, 5: 0.80}
-# Continuous fixture model: mult = clip((0.65*att_ratio + 0.35*def_ratio)^GAMMA)
+# Fixture difficulty: continuous strength-based multipliers (see
+# features.strength_fixture_mult; validated on 2024/25 replay).
+# mult = clip((0.65*att_ratio + 0.35*def_ratio)^GAMMA)
 STRENGTH_GAMMA = 1.0        # sensitivity of the strength ratio
 STRENGTH_CLIP = (0.70, 1.40)
 HORIZON_DISCOUNT = 0.90     # per-GW discount inside ep_horizon: near-term dominates

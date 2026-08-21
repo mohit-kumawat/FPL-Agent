@@ -143,6 +143,17 @@ def test_unsuffixed_chip_names_still_work():
     assert sorted(rules.playable_now(["bboost", "3xc"], 10, w)) == ["3xc", "bboost"]
 
 
+def test_chip_window_end_is_the_expiry_the_held_copy_races():
+    """A chip is held against its OWN deadline: the set-1 copy dies at the
+    split, so anything it is being held for has to land by GW19."""
+    w = rules.chip_windows(BOOT)
+    assert rules.chip_window_end("bboost", 1, w) == 19
+    assert rules.chip_window_end("3xc", 19, w) == 19
+    assert rules.chip_window_end("3xc", 20, w) == 38
+    assert rules.chip_window_end("wildcard", 1, w) is None    # opens at GW2
+    assert rules.chip_window_end("bboost", 39, w) is None
+
+
 def test_valid_chip_names_cover_both_sets():
     names = rules.valid_chip_names()
     for family in rules.CHIP_FAMILIES:
@@ -167,7 +178,7 @@ def test_only_one_chip_is_recommended_per_gameweek():
     """FPL allows one chip per gameweek; two NOW recommendations is illegal advice."""
     notes = policy.chip_advice(_boot_at(10), _xi(14.0, 2, 20.0),
                                ["3xc1", "bboost1"], scenarios=[
-                                   {"gw": 30, "kind": "double", "prob": 0.2}])
+                                   {"gw": 18, "kind": "double", "prob": 0.2}])
     nows = [n for n in notes if "NOW" in n]
     assert len(nows) == 1
     assert any("only one chip per gameweek" in n for n in notes)
@@ -196,7 +207,9 @@ def test_no_playable_chip_says_so_without_inventing_advice():
 def test_zero_ep_never_reads_as_play():
     """A blank gameweek (or missing fixture data) makes both EVs zero, where
     `now >= hold` is trivially true and used to print 'play'."""
-    notes = policy.chip_advice(_boot_at(28), _xi(0.0, 1, 0.0), ["3xc1", "bboost1"])
+    # second-half copies: a first-half one is not playable in GW28 at all, so
+    # the assertions below would pass vacuously against "3xc1"/"bboost1"
+    notes = policy.chip_advice(_boot_at(28), _xi(0.0, 1, 0.0), ["3xc2", "bboost2"])
     assert not any("NOW" in n for n in notes)
     assert all("hold" in n for n in notes if "Triple Captain" in n or "Bench Boost" in n)
 

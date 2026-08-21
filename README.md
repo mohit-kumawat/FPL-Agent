@@ -302,7 +302,7 @@ churn three transfers for +0.4 EP.
 | Plan choice | among plans clearing their threshold, the **highest net gain** wins, tie-breaking toward fewer transfers |
 | Otherwise | **hold** and bank the transfer; the report always states the net EP of the best alternative |
 | Captain | highest `ep_next` in the XI, with ownership context; a differential option (ownership < 15%, within 1 EP) is shown advisory-only |
-| Chips | windows flagged (wildcards GW2–19 and GW20–38, doubles for TC/BB); recommend-only, the owner decides |
+| Chips | windows flagged (wildcards GW2–19 and GW20–38, doubles for TC/BB); each copy is valued against **its own** expiry, so a first-half chip earns no hold value from a second-half double; recommend-only, the owner decides |
 | Uncertainty flags | before GW3, any pick at £7.0m or above without a season of data **and** without a signal is flagged "research before trusting" |
 
 ### 4c. Squad rating
@@ -469,7 +469,9 @@ tier-0 availability evidence; a flagged player needs an applied signal floor.
 carries unresolved risk, the gate enumerates both sides instead of falling
 silent. Chip EV follows the same rule — a default double-gameweek prior never
 fires a chip; play-now must be scenario-evidenced or dominant even against a
-certain future double. Gate verdicts are recorded in `decisions.jsonl`, so the
+certain future double. Scaling that prior down for a chip near its expiry cannot
+loosen the rule: the certain-double comparison is independent of the prior, so a
+shorter window turns "hold" into `owner_choice`, never into an unevidenced play. Gate verdicts are recorded in `decisions.jsonl`, so the
 abstention rate is itself a tracked metric.
 
 **Owner approval.** A recommendation is a proposal until `fpl approve` records
@@ -649,8 +651,9 @@ underperforms.
   split. What it does not do is plan a season-long chip route across both halves.
 - **Chip EV covers Triple Captain and Bench Boost only**, computed *given*
   double/blank scenarios the agent supplies from research (plus a decaying
-  default prior). Free Hit and Wildcard remain structural advice; nothing
-  optimises a chip route across the whole season.
+  default prior, clipped to the chip copy's own window). Free Hit and Wildcard
+  remain structural advice; nothing optimises a chip route across the whole
+  season.
 - **Ownership enters captaincy only.** `safe` / `balanced` / `chase` modes can
   hand the armband to a close differential (moving the vice with it), but
   transfers and squad structure are ownership-blind, and effective ownership
@@ -723,7 +726,8 @@ All constants live in `config.py` with the evidence for their value beside them.
 | `PRICE_MOVE_IMMINENT` / `_WATCH` | 90 / 60 % | Timing nudges only on moves the model already wants — cheap if the field's semantics surprise |
 | `CHASE_EP_TOLERANCE` | 1.0 EP | Max EP a differential armband may cost in chase mode |
 | `CHIP_PLAY_MARGIN` | 1.15 | Chips are one-shot options; ties go to holding |
-| `DEFAULT_DOUBLE_PROB` / `_LAST_GW` | 0.8 / GW30 | Unresearched-double prior; silence after GW30 means none |
+| `DEFAULT_DOUBLE_PROB` / `_LAST_GW` | 0.8 / GW30 | Unresearched-double prior over a full remaining season; silence after GW30 means none |
+| `DOUBLE_CLUSTER_FIRST_GW` / `DOUBLE_EARLY_WEIGHT` | GW25 / 0.15 | Doubles come from the postponement backlog, so an earlier gameweek carries a fraction of the odds — this is what scales the prior down for a chip whose window closes at the split |
 | `DC_POINTS` | GKP 0, others 2 | `game_config.scoring.defensive_contribution` — keepers earn none |
 | `DC_THRESHOLD` | DEF 10, MID/FWD 12 | CBIT for defenders, CBIRT (incl. recoveries) for the rest |
 | `GW_LOCKDOWN_LOCAL_HOUR` | 09:00 UK | 2026/27 lockdown moved to the morning after the last match; calibration waits for it |
