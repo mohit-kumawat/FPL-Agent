@@ -23,6 +23,10 @@ from . import config
 
 MIN_PRIOR_MINUTES = 900   # below this, prior-season stats are noise
 
+# share of 90 a substitute appearance is worth, used to keep p_start consistent
+# with xmins in minutes_distribution(). ~18' is the typical FPL sub cameo.
+SUB_MINUTES_SHARE = 0.20
+
 
 # ------------------------------------------------------------------ minutes
 def expected_minutes_fraction(df: pd.DataFrame) -> pd.Series:
@@ -61,6 +65,18 @@ def minutes_distribution(df: pd.DataFrame, xmins: pd.Series) -> pd.DataFrame:
     hour". p_start comes from observed start rates; p_bench is the remaining
     appearance probability; minutes_sd peaks in the rotation zone and goes to
     zero for nailed starters and clear non-players.
+
+    Observed start rates are the *preferred* source for p_start, but they are
+    not always compatible with `xmins` — a minutes signal raises xmins without
+    touching the history the rate came from, which would otherwise leave a
+    player reading "certain to appear, but probably off the bench" while xmins
+    says he plays most of a match. So p_start is floored at the lowest value
+    that could produce `xmins` at all: a starter contributes at most a full
+    match and a substitute appearance at most SUB_MINUTES_SHARE of one, giving
+    xmins <= p_start + (p_play - p_start) * SUB_MINUTES_SHARE. The floor binds
+    only on genuine contradictions (one player in 519 on live data with no
+    signals applied), so observed rates keep their information everywhere they
+    are feasible.
     """
     gws = df["gws_played"].iloc[0] if len(df) else 0
     if gws > 0 and "roll_starts" in df.columns and df["roll_starts"].notna().any():
@@ -74,7 +90,19 @@ def minutes_distribution(df: pd.DataFrame, xmins: pd.Series) -> pd.DataFrame:
 
     p_play = (xmins / 0.60).clip(0, 1)
     p_60 = pd.Series(1.0 / (1.0 + np.exp(-(xmins - 0.63) / 0.09)), index=df.index)
-    p_start = (start_rate * df["play_chance"]).clip(0, 1).clip(upper=p_play)
+    # feasible band for p_start given xmins: the floor is where every start goes
+    # the full 90 and every sub appearance lasts SUB_MINUTES_SHARE of one; the
+    # ceiling is p_play, which is the same identity read with starters playing
+    # the 0.60 of a match that p_play already assumes.
+    start_floor = ((xmins - SUB_MINUTES_SHARE * p_play)
+                   / (1.0 - SUB_MINUTES_SHARE)).clip(lower=0)
+    rate = (start_rate * df["play_chance"]).clip(0, 1)
+    # a rate outside the band cannot produce this xmins, so it is stale rather
+    # than informative — a minutes signal moved xmins without moving the history
+    # it came from. Fall back to the xmins-implied floor instead of pinning to
+    # whichever extreme the stale rate happens to sit past.
+    p_start = rate.where(rate.between(start_floor, p_play), start_floor)
+    p_start = p_start.clip(lower=start_floor, upper=p_play)
     p_bench = (p_play - p_start).clip(lower=0)
     exp_minutes = xmins * 90.0
     # binomial-style spread on the two big forks (plays at all / reaches 60'):

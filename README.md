@@ -35,7 +35,7 @@ and produces recommendations for a human to act on.
 |---|---|
 | Docs | This file (full reference) · [AGENT.md](AGENT.md) (agent runbook) · [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Evidence | [eval/2024-25-report.md](eval/2024-25-report.md) · [eval/strategy-sim-report.md](eval/strategy-sim-report.md) · [eval/ablation-report.md](eval/ablation-report.md) |
-| Tests | `uv run pytest -q` (200 offline tests) · `uv run python eval/run_backtests.py` (replay suite) |
+| Tests | `uv run pytest -q` (205 offline tests) · `uv run python eval/run_backtests.py` (replay suite) |
 | Licence | MIT |
 
 *The rest of this file is the complete technical reference: exactly what the code
@@ -67,7 +67,7 @@ Module map:
 | `memoryio.py` | 662 | State, decisions, predictions, evidence-gated signals, claim + captaincy scoring, learnings check |
 | `policy.py` | 461 | Decision thresholds, captaincy + strategy modes, chip EV (evidence-ruled), price timing, flags |
 | `data.py` | 414 | API client, snapshots, price-freshness logic, change detection, history loaders |
-| `models.py` | 394 | Minutes model + distribution (p_start/p_60/p_bench), prior tier, ensemble, component EP |
+| `models.py` | 422 | Minutes model + distribution (p_start/p_60/p_bench), prior tier, ensemble, component EP |
 | `daily.py` | 377 | Orchestrator: verify → changes → triggers → policy → gate → digest |
 | `report.py` | 345 | Markdown + JSON report writer, decision gate + owner-decision sections |
 | `digest.py` | 269 | Season digest + the compact context handed to the next run |
@@ -521,7 +521,7 @@ uv run fpl pending [list|add <text>|done <substr>]
 uv run fpl approve [approved|rejected|deferred] [note]   # record owner decision
 uv run fpl backtest               # model A/B/ensemble, out-of-sample
 uv run fpl refresh                # force re-fetch
-uv run pytest -q                  # 200 offline tests, no network
+uv run pytest -q                  # 205 offline tests, no network
 uv run python eval/run_backtests.py    # point-in-time replay suite
 uv run python eval/strategy_sim.py     # full-season strategy return
 uv run python eval/ablation.py         # ablation ladder + bootstrap CIs
@@ -615,6 +615,19 @@ underperforms.
   `not_in_predicted_xi`, …) — but the inputs remain rolling minutes, injury
   flags, and research. A missed press conference is still a real failure mode;
   nothing anticipates rotation the news has not hinted at.
+- **A nailed starter is treated as certain to appear, so autosub value is
+  unpriced.** `p_play = min(1, xmins / 0.60)`, so every player at or above an
+  xmins of 0.60 gets P(appears) = 1 and carries *no* zero-minutes mass; below
+  0.60 the mass is real (on a live August 2026 bootstrap, 399 of 519 available
+  players had `p_start + p_bench < 1`). The consequence is that a bench player
+  who actually starts for his club is worth strictly more than any EP figure
+  here shows, because the protection he provides against a late injury,
+  illness, suspension or tactical omission among the XI is invisible to the
+  model. Bench-quality decisions therefore need judgement on top of the
+  numbers, and `chip_advice`'s Bench Boost valuation is a floor, not an
+  estimate. Adding a small zero-minutes mass for fit players is the genuine
+  fix; it would move EP for every player and needs the replay suite to
+  validate, so it is deliberately not done.
 - **`P(CS) = exp(−xGC/90)` assumes Poisson goals**, and the Monte Carlo engine
   *explicitly inherits* that assumption — simulation made it stochastic, not
   better. Doubles are treated as one aggregate exposure, which slightly

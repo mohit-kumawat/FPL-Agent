@@ -21,6 +21,63 @@ def test_minutes_distribution_fields_are_coherent():
     assert (ep["expected_minutes"] - ep["xmins"] * 90).abs().max() < 1e-9
 
 
+def test_start_and_bench_probability_sum_to_the_appearance_probability():
+    """p_start + p_bench is P(appears) = p_play, NOT 1.0. Players under an xmins
+    of 0.60 keep genuine zero-minutes mass; only those at or above it are treated
+    as certain to appear. Pinning this stops the two readings drifting apart."""
+    ep = models.expected_points(_players())
+    p_play = (ep["xmins"] / 0.60).clip(0, 1)
+    assert ((ep["p_start"] + ep["p_bench"]) - p_play).abs().max() < 1e-9
+    assert (ep["p_start"] <= p_play + 1e-9).all()
+
+
+def test_minutes_signal_moves_p_start_with_xmins():
+    """A signal that raises xmins must raise p_start too. Regression: roles set
+    only the xmins bound, so p_start kept its stale price-prior value and a
+    signalled starter read as 'certain to appear, probably off the bench'."""
+    df = _players()
+    # a new signing with no history: xmins comes from the price prior, ~0.30
+    df.loc[df["id"] == 8, ["minutes", "starts"]] = [0, 0]
+    plain = models.expected_points(df)
+    base = plain.loc[plain["id"] == 8].iloc[0]
+
+    up = pd.DataFrame({"xmins_min": [0.85]}, index=[8])
+    lifted = models.expected_points(df, None, up)
+    row = lifted.loc[lifted["id"] == 8].iloc[0]
+
+    assert row["xmins"] > base["xmins"]
+    assert row["p_start"] > base["p_start"], "p_start ignored the minutes signal"
+    assert row["p_start"] > 0.6, "an expected starter should read as likely to start"
+    assert abs((row["p_start"] + row["p_bench"]) - 1.0) < 1e-9
+
+
+def test_minutes_cap_pulls_p_start_down():
+    """The mirror case: a bench_role cap must not leave a player reading as a
+    75%-likely starter with zero chance of a substitute appearance."""
+    df = _players()
+    down = pd.DataFrame({"xmins_max": [0.45]}, index=[8])
+    capped = models.expected_points(df, None, down)
+    row = capped.loc[capped["id"] == 8].iloc[0]
+
+    assert row["xmins"] == pytest.approx(0.45)
+    assert row["p_start"] < 0.5, "a capped player still read as a likely starter"
+    assert row["p_bench"] > 0, "a bench role must carry substitute-appearance mass"
+
+
+def test_p_start_stays_inside_the_band_xmins_allows():
+    """p_start must be reachable from xmins: at least the value implied when every
+    start is a full 90 and every cameo is SUB_MINUTES_SHARE long, at most p_play."""
+    for adjust in (None,
+                   pd.DataFrame({"xmins_min": [0.85]}, index=[8]),
+                   pd.DataFrame({"xmins_max": [0.45]}, index=[8])):
+        ep = models.expected_points(_players(), None, adjust)
+        p_play = (ep["xmins"] / 0.60).clip(0, 1)
+        floor = ((ep["xmins"] - models.SUB_MINUTES_SHARE * p_play)
+                 / (1.0 - models.SUB_MINUTES_SHARE)).clip(lower=0)
+        assert (ep["p_start"] >= floor - 1e-9).all()
+        assert (ep["p_start"] <= p_play + 1e-9).all()
+
+
 def test_minutes_sd_peaks_in_the_rotation_zone():
     df = _players()
     nailed = df.copy(); nailed["minutes"] = 3400; nailed["starts"] = 38
