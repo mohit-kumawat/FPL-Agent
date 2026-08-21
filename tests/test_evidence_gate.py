@@ -301,7 +301,9 @@ def test_researched_scenario_probability_still_fires_a_chip():
     xi = _xi(0.0, 1)
     xi["bench_order"] = pd.DataFrame(
         [{"id": 3, "ep_next": 10.0, "next_n_fixtures": 2}])
-    scen = [{"gw": 29, "kind": "double", "prob": 0.8}]
+    # GW17 is inside the set-1 window: a researched double the chip can be held
+    # for. (A GW29 one is worthless to bboost1 — see the expiry test below.)
+    scen = [{"gw": 17, "kind": "double", "prob": 0.8}]
     notes = policy.chip_advice(_boot_gw(10), xi, ["bboost1"], scenarios=scen)
     assert any("Bench Boost" in n and "NOW" in n for n in notes)
 

@@ -181,10 +181,49 @@ def test_triple_captain_on_a_double_beats_a_thin_future():
 
 
 def test_triple_captain_holds_for_a_likely_double():
-    scen = [{"gw": 29, "kind": "double", "prob": 0.9}]
+    # GW17 is inside the set-1 window the GW10 copy is playing against
+    scen = [{"gw": 17, "kind": "double", "prob": 0.9}]
     notes = policy.chip_advice(_boot(10), _xi(cap_ep=6.0, cap_fx=1),
                                ["3xc"], scenarios=scen)
     assert any("Triple Captain" in n and "hold" in n for n in notes)
+    assert not any("NOW" in n for n in notes)
+
+
+def test_a_set_1_chip_gets_no_hold_value_from_a_post_split_double():
+    """Regression: the double horizon was a global GW30, so a first-half chip
+    was held against a double it could never be played on. bboost1 expires at
+    GW19; a researched GW28 double must not appear in its hold value at all."""
+    xi = _xi(6.0, 1, bench_ep=10.0)
+    scen = [{"gw": 28, "kind": "double", "prob": 0.9}]
+    notes = policy.chip_advice(_boot(10), xi, ["bboost1"], scenarios=scen)
+    bb = [n for n in notes if "Bench Boost" in n]
+    assert bb and not any("GW28" in n for n in bb)
+    # the SAME research does move a second-half copy, which can use it
+    second = policy.chip_advice(_boot(24), xi, ["bboost2"], scenarios=scen)
+    assert any("GW28" in n for n in second if "Bench Boost" in n)
+
+
+def test_hold_value_falls_as_a_first_half_chip_nears_its_expiry():
+    """The assumed-double prior must shrink with the window a chip has left:
+    holding BB1 at GW18 buys one more gameweek, not eighteen."""
+    early = policy._future_double(None, 2, window_end=19)
+    late = policy._future_double(None, 18, window_end=19)
+    full_season = policy._future_double(None, 2, window_end=38)
+    assert 0.0 < late[0] < early[0] < full_season[0] == policy.DEFAULT_DOUBLE_PROB
+    assert "GW19" in early[1] and early[2] == "default"
+    # and the last gameweek of the window has nothing left to hold for
+    assert policy._future_double(None, 19, window_end=19)[0] == 0.0
+
+
+def test_a_set_1_chip_surfaces_as_a_decision_rather_than_expiring():
+    """The practical bug: BB1 read as a flat 'hold' every week of the first half
+    against a GW28 double, then expired unused. It must now reach the owner."""
+    xi = _xi(0.0, 1)
+    xi["bench_order"] = pd.DataFrame(
+        [{"id": 3, "ep_next": 10.0, "next_n_fixtures": 2}])
+    notes = policy.chip_advice(_boot(10), xi, ["bboost1"])
+    assert any("OWNER CHOICE" in n and "Bench Boost" in n for n in notes)
+    # still evidence-gated: a default prior alone never fires the chip
     assert not any("NOW" in n for n in notes)
 
 

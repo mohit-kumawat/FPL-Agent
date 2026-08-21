@@ -25,9 +25,18 @@ CHASE_EP_TOLERANCE = 1.0   # chase may prefer a differential within this EP gap
 # one-shot options, so ties go to holding
 CHIP_PLAY_MARGIN = 1.15
 # when the agent has supplied no double/blank scenarios, assume a usable double
-# is still coming while the season is young (they cluster in GW29-37)
+# is still coming while the season is young. The prior is stated over a FULL
+# remaining season; a chip whose window closes earlier only gets the part of
+# that reach it can actually use (see _future_double).
 DEFAULT_DOUBLE_PROB = 0.8
 DEFAULT_DOUBLE_LAST_GW = 30      # past this, no-scenario means no assumed double
+# Doubles are made by the postponement backlog, which only builds up once cup
+# rounds and winter call-offs have piled in, so they bunch late. A gameweek
+# before the cluster carries only DOUBLE_EARLY_WEIGHT of the odds a late one
+# does — which is why an 18-gameweek reach inside the FIRST half is worth far
+# less than "sometime before GW30", not proportionally less.
+DOUBLE_CLUSTER_FIRST_GW = 25
+DOUBLE_EARLY_WEIGHT = 0.15
 DOUBLE_CAPTAIN_MULT = 1.7        # a doubled premium returns ~1.7x a single GW
 DOUBLE_BENCH_MULT = 1.8          # bench boost scales closer to 2x (4 players)
 
@@ -291,7 +300,22 @@ def price_timing_notes(players: pd.DataFrame, in_ids: list[int],
     return notes
 
 
-def _future_double(scenarios: list[dict] | None, gw: int) -> tuple[float, str, str]:
+def _double_mass(first_gw: int, last_gw: int) -> float:
+    """Relative odds a usable double lands somewhere in [first_gw, last_gw].
+
+    Unit-free: only the ratio of two masses is ever used, so the absolute scale
+    does not matter. Gameweeks from DOUBLE_CLUSTER_FIRST_GW on count fully;
+    earlier ones count DOUBLE_EARLY_WEIGHT, because that is where doubles
+    actually happen.
+    """
+    if last_gw < first_gw:
+        return 0.0
+    return sum(1.0 if g >= DOUBLE_CLUSTER_FIRST_GW else DOUBLE_EARLY_WEIGHT
+               for g in range(max(1, first_gw), last_gw + 1))
+
+
+def _future_double(scenarios: list[dict] | None, gw: int,
+                   window_end: int | None = None) -> tuple[float, str, str]:
     """(probability of a usable future double, provenance label, provenance kind).
 
     Scenario facts come from the agent's research (fixture congestion, cup
@@ -299,21 +323,42 @@ def _future_double(scenarios: list[dict] | None, gw: int) -> tuple[float, str, s
     scenarios, a default prior applies while doubles are still plausibly
     ahead — after DEFAULT_DOUBLE_LAST_GW silence means none.
 
+    `window_end` is the last gameweek the chip being evaluated may still be
+    played (`rules.chip_window_end`). A double past it is worth nothing to THIS
+    chip: a set-1 Bench Boost expiring at GW19 can never be played on a GW28
+    double, so crediting hold value for one is how BB1 and TC1 end up held until
+    they expire. Both the researched scenarios and the default prior are
+    therefore clipped to the chip's own window — and because the default prior
+    is stated over a full remaining season, clipping also scales it down to the
+    slice of double-likelihood the window still reaches. Omit `window_end` and
+    the horizon is the season's (the pre-two-chip-set behaviour).
+
     The kind ("signal" / "default" / "late") matters downstream: an ACTIONABLE
     play-now must never rest on the default prior alone (see chip_advice's
     dominance test) — a default probability is a model assumption, not evidence.
     """
+    horizon = (DEFAULT_DOUBLE_LAST_GW if window_end is None
+               else min(int(window_end), DEFAULT_DOUBLE_LAST_GW))
     future = [s for s in (scenarios or [])
-              if s.get("kind") == "double" and int(s.get("gw", 0)) > gw]
+              if s.get("kind") == "double" and gw < int(s.get("gw", 0)) <= horizon]
     if future:
         best = max(future, key=lambda s: float(s.get("prob", 0)))
         return (float(best.get("prob", 0)),
                 f"[SIGNAL] double expected GW{best['gw']} (p={best.get('prob')})",
                 "signal")
-    if gw <= DEFAULT_DOUBLE_LAST_GW:
-        return DEFAULT_DOUBLE_PROB, ("[MODEL] no scenario research yet — assuming a "
-                                     f"usable double before season end (p={DEFAULT_DOUBLE_PROB})"), "default"
-    return 0.0, "[MODEL] season too late for an unresearched double", "late"
+    # which constraint bit: the chip's own expiry, or the season running out
+    clipped = window_end is not None and int(window_end) < DEFAULT_DOUBLE_LAST_GW
+    if gw >= horizon:
+        return 0.0, (f"[MODEL] this chip's window closes at GW{horizon} — no "
+                     "gameweek left in it for an unresearched double" if clipped
+                     else "[MODEL] season too late for an unresearched double"), "late"
+    reachable = _double_mass(gw + 1, horizon)
+    season = _double_mass(gw + 1, DEFAULT_DOUBLE_LAST_GW)
+    p = round(DEFAULT_DOUBLE_PROB * (reachable / season if season > 0 else 0.0), 2)
+    reach = (f"by GW{horizon}, when this chip expires" if clipped
+             else "before season end")
+    return p, ("[MODEL] no scenario research yet — assuming a usable double "
+               f"{reach} (p={p})"), "default"
 
 
 def chip_advice(boot: dict, xi_result: dict | None, chips_available: list[str],
@@ -329,6 +374,11 @@ def chip_advice(boot: dict, xi_result: dict | None, chips_available: list[str],
 
     Advisory by design: a chip copy fires once per half, so the bar for "now" is
     now >= hold x CHIP_PLAY_MARGIN, and every number states its assumptions.
+
+    The value of holding is capped by the chip's OWN window: a copy that expires
+    at the split gets no credit for a double it could never be played on, so a
+    first-half Bench Boost or Triple Captain surfaces as a decision instead of
+    quietly sitting on a hold premised on GW28.
     """
     notes: list[str] = []
     nxt = next((e for e in boot["events"] if e["is_next"]), None)
@@ -363,7 +413,11 @@ def chip_advice(boot: dict, xi_result: dict | None, chips_available: list[str],
                          "[RECOMMENDATION] Hold — chip EV needs a settled squad.")
         return notes
 
-    p_double, why, provenance = _future_double(scenarios, gw)
+    # Each chip races its OWN expiry, so each gets its own double horizon: a
+    # set-1 copy cannot be held for a GW28 double no matter how well researched.
+    evidence = {family: _future_double(scenarios, gw,
+                                       rules.chip_window_end(family, gw, windows))
+                for family in playable}
 
     def _n_fx(row) -> float:
         """Fixture count for a row, defaulting to 1 on missing/NaN."""
@@ -386,7 +440,7 @@ def chip_advice(boot: dict, xi_result: dict | None, chips_available: list[str],
         cap_ep = float(cap_row["ep_next"])              # this GW, all fixtures
         cap_per_fx = cap_ep / cap_n_fx                  # single-fixture equivalent
         scored.append(("3xc", cap_ep,                   # TC adds +1x beyond 2x
-                       cap_per_fx * DOUBLE_CAPTAIN_MULT * p_double))
+                       cap_per_fx * DOUBLE_CAPTAIN_MULT * evidence["3xc"][0]))
 
     if "bboost" in playable and "bench_order" in xi_result:
         bench = xi_result["bench_order"]
@@ -399,7 +453,8 @@ def chip_advice(boot: dict, xi_result: dict | None, chips_available: list[str],
         else:
             n = pd.Series(1.0, index=bench.index)
         scored.append(("bboost", float(ep.sum()),
-                       float((ep / n).sum()) * DOUBLE_BENCH_MULT * p_double))
+                       float((ep / n).sum()) * DOUBLE_BENCH_MULT
+                       * evidence["bboost"][0]))
 
     # A chip is worth playing only if it beats holding AND actually banks
     # something — with zero EP on both sides (a blank, or missing fixture data)
@@ -407,28 +462,33 @@ def chip_advice(boot: dict, xi_result: dict | None, chips_available: list[str],
     def clears(now_ev: float, hold_ev: float) -> bool:
         return now_ev > 0.05 and now_ev >= hold_ev * CHIP_PLAY_MARGIN
 
-    def prior_dependent(now_ev: float, hold_ev: float) -> bool:
+    def prior_dependent(family: str, now_ev: float, hold_ev: float) -> bool:
         """True when 'play now' holds under the DEFAULT prior but flips if a
         future double is certain. Evidence rule: a default probability may never
         produce an ACTIONABLE recommendation — the dominance test is what makes
         the default-prior path safe. Play-now survives it only when it wins even
         against a guaranteed future double (then no scenario research could
-        change the answer)."""
+        change the answer). Scaling the prior down for a short window cannot
+        smuggle a play past this test: hold_ev is proportional to p_double, so
+        hold_ev / p_double — the certain-double comparison — is the same number
+        whatever the prior."""
+        p_double, _, provenance = evidence[family]
         if provenance != "default" or p_double <= 0:
             return False
         return clears(now_ev, hold_ev) and not clears(now_ev, hold_ev / p_double)
 
     winner = max((s for s in scored
-                  if clears(s[1], s[2]) and not prior_dependent(s[1], s[2])),
+                  if clears(s[1], s[2]) and not prior_dependent(*s)),
                  key=lambda s: s[1] - s[2], default=None)
     for family, now_ev, hold_ev in scored:
-        if prior_dependent(now_ev, hold_ev):
+        _, why, _ = evidence[family]
+        if prior_dependent(family, now_ev, hold_ev):
             notes.append(
                 f"[MODEL] {label(family)}: now +{now_ev:.1f} EP clears the bar only "
-                f"under the ASSUMED double prior (p={p_double}) and holds if a double "
+                "under the ASSUMED double prior and holds if a double "
                 "is certain — OWNER CHOICE pending scenario research: confirm or rule "
                 "out a usable future double (`scenarios:` in signals/). "
-                "A default probability never fires a chip.")
+                f"A default probability never fires a chip. {why}")
             continue
         verdict = "play" if clears(now_ev, hold_ev) else "hold"
         if winner is not None and family == winner[0]:

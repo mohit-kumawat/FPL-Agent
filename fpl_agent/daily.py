@@ -68,7 +68,7 @@ def decide_work(changes: dict, boot: dict, squad: dict, has_signals: bool,
 
     triggers: list[str] = []
     work = {"models": False, "optimizer": False, "full_retrain": False,
-            "final_check": False, "triggers": triggers, "hours_to_deadline": hrs}
+            "triggers": triggers, "hours_to_deadline": hrs}
 
     if changes["first_run"]:
         triggers.append("first run — full baseline")
@@ -95,8 +95,6 @@ def decide_work(changes: dict, boot: dict, squad: dict, has_signals: bool,
     if hrs is not None and hrs <= 72:
         triggers.append(f"deadline in {hrs:.0f}h — full decision run")
         work.update(models=True, optimizer=True)
-        if hrs <= 24:
-            work["final_check"] = True
     if changes["price_changes"] and not work["models"]:
         if touches_squad(changes["price_changes"]):
             # a rise/fall on an owned player moves selling prices and
