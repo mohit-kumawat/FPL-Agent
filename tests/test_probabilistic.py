@@ -203,6 +203,45 @@ def test_a_set_1_chip_gets_no_hold_value_from_a_post_split_double():
     assert any("GW28" in n for n in second if "Bench Boost" in n)
 
 
+def test_a_researched_late_double_is_never_discarded_as_too_late():
+    """DEFAULT_DOUBLE_LAST_GW bounds the unresearched PRIOR, not research. A
+    GW34 double the owner has actually researched is playable by a chip that
+    lives to GW38, and clipping it turned a hold into an actionable play."""
+    scen = [{"gw": 34, "kind": "double", "prob": 0.9}]
+    p, why, kind = policy._future_double(scen, 31, window_end=38)
+    assert (p, kind) == (0.9, "signal") and "GW34" in why
+    notes = policy.chip_advice(_boot(31), _xi(6.0, 1), ["3xc2"], scenarios=scen)
+    assert any("Triple Captain" in n and "hold" in n for n in notes)
+    assert not any("NOW" in n for n in notes)
+    # ... but it is still unusable by a copy that expires at the split
+    assert policy._future_double(scen, 10, window_end=19)[2] == "default"
+
+
+def test_the_prior_survives_its_own_last_gameweek():
+    """At GW30 a second-half chip still has eight gameweeks of window left, so
+    the prior holds; it lapses only once the season passes the cutoff. A zero
+    here would fire a one-shot chip off a model assumption."""
+    assert policy._future_double(None, 30, window_end=38)[0] == pytest.approx(
+        policy.DEFAULT_DOUBLE_PROB)
+    assert policy._future_double(None, 31, window_end=38)[2] == "late"
+    notes = policy.chip_advice(_boot(30), _xi(6.0, 1), ["3xc2"])
+    assert not any("NOW" in n for n in notes)
+
+
+def test_the_default_prior_never_rounds_down_to_an_ungated_zero():
+    """prior_dependent treats p == 0 as "no prior to gate", so a prior rounded
+    to 0.0 would let a model assumption fire a chip. The arithmetic must keep
+    full precision however small the remaining window is."""
+    assert policy._future_double(None, 18, window_end=19)[0] > 0.0
+    for prob in (0.1, 0.01):
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(policy, "DEFAULT_DOUBLE_PROB", prob)
+            p, _, kind = policy._future_double(None, 18, window_end=19)
+            assert kind == "default" and p > 0.0
+            notes = policy.chip_advice(_boot(18), _xi(6.0, 1), ["3xc1"])
+            assert not any("NOW" in n for n in notes)
+
+
 def test_hold_value_falls_as_a_first_half_chip_nears_its_expiry():
     """The assumed-double prior must shrink with the window a chip has left:
     holding BB1 at GW18 buys one more gameweek, not eighteen."""

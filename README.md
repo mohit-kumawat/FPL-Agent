@@ -713,7 +713,7 @@ All constants live in `config.py` with the evidence for their value beside them.
 | `PRICE_MOVE_IMMINENT` / `_WATCH` | 90 / 60 % | Timing nudges only on moves the model already wants — cheap if the field's semantics surprise |
 | `CHASE_EP_TOLERANCE` | 1.0 EP | Max EP a differential armband may cost in chase mode |
 | `CHIP_PLAY_MARGIN` | 1.15 | Chips are one-shot options; ties go to holding |
-| `DEFAULT_DOUBLE_PROB` / `_LAST_GW` | 0.8 / GW30 | Unresearched-double prior over a full remaining season; silence after GW30 means none |
+| `DEFAULT_DOUBLE_PROB` / `_LAST_GW` | 0.8 / GW30 | Unresearched-double prior over a full remaining season; silence after GW30 means none. Bounds the prior only — a researched double is never dropped for being late |
 | `DOUBLE_CLUSTER_FIRST_GW` / `DOUBLE_EARLY_WEIGHT` | GW25 / 0.15 | Doubles come from the postponement backlog, so an earlier gameweek carries a fraction of the odds — this is what scales the prior down for a chip whose window closes at the split |
 | `DC_POINTS` | GKP 0, others 2 | `game_config.scoring.defensive_contribution` — keepers earn none |
 | `DC_THRESHOLD` | DEF 10, MID/FWD 12 | CBIT for defenders, CBIRT (incl. recoveries) for the rest |
